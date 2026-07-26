@@ -1,0 +1,12 @@
+{
+  "name": "Lexis · 生词本",
+  "short_name": "Lexis",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#fbfaf7",
+  "theme_color": "#fbfaf7",
+  "icons": [
+    { "src": "icons/icon128.png", "sizes": "128x128", "type": "image/png" }
+  ]
+}

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#fbfaf7">
+<title>Lexis · 生词本</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Lexis">
+<link rel="apple-touch-icon" href="icons/icon128.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Lexis</div>
+    <div class="sub" id="dueBadge"></div>
+  </header>
+
+  <main id="view"></main>
+
+  <nav class="tabbar" id="tabbar">
+    <button data-tab="lookup" class="on"><span>查词</span></button>
+    <button data-tab="notebook"><span>生词本</span></button>
+    <button data-tab="review"><span>复习</span></button>
+    <button data-tab="discover"><span>发现</span></button>
+    <button data-tab="me"><span>我的</span></button>
+  </nav>
+
+  <script src="vocab.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
