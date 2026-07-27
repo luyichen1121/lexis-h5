@@ -169,9 +169,11 @@
       } catch (e) {}
       // easily-confused look-alikes — sounds-like neighbours within edit distance 2
       try {
-        const sl = await withTimeout(jget(dmURL("sl", term, "max=15&md=df")), 6000, []);
+        const sl = await withTimeout(jget(dmURL("sl", term, "max=20&md=df")), 6000, []);
         out.lookalikes = (sl || []).filter((x) => x.word && x.word !== term && lev(term, x.word) <= 2)
-          .slice(0, 6).map((x) => { const d = parseDm(x); return { word: x.word, definition: d.definition, cn: "" }; });
+          .map((x) => { const d = parseDm(x); return { word: x.word, definition: d.definition, cn: "" }; })
+          .filter((c) => c.definition) // drop junk misspellings with no gloss (e.g. "effekt")
+          .slice(0, 6);
       } catch (e) {}
       // common collocations — words that frequently follow / precede this one
       try {
