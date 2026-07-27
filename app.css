@@ -138,3 +138,22 @@ select{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size
 .pickw{cursor:pointer;padding:1px 3px;border-radius:4px;text-decoration:underline;
   text-decoration-color:var(--line);text-underline-offset:3px}
 .pickw:active{background:var(--clay);color:#fff}
+
+/* synonyms (近义辨析) — each with pos/band/definition */
+.syn{padding:8px 0;border-bottom:1px solid var(--line)}
+.syn:last-child{border-bottom:0}
+.syn-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.syn-w{border:0;background:none;padding:0;font-size:16px;color:var(--clay);cursor:pointer;font-weight:600}
+.syn-d{color:var(--ink2);font-size:14px;margin-top:3px;line-height:1.5}
+.mfreq{font-size:10px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--ink2)}
+.freq-common{background:#eef5ec;color:#4f7a4a;border-color:#d5e6d1}
+.freq-mid{background:#fdf3e8;color:#b5762c;border-color:#f0dcc0}
+.freq-low{background:#f4eef8;color:#8256a6;border-color:#e2d3ee}
+.freq-rare{background:#f6ecec;color:#a85454;border-color:#ecd5d5}
+
+/* look-alikes (形近词) */
+.conf{display:flex;gap:10px;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--line)}
+.conf:last-child{border-bottom:0}
+.conf-w{border:0;background:none;padding:0;font-size:15px;color:var(--clay);cursor:pointer;font-weight:600;white-space:nowrap}
+.conf-d{color:var(--ink2);font-size:13px;line-height:1.5}
+.chip small{color:var(--sage);font-style:italic}

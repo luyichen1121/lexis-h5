@@ -111,20 +111,79 @@
     } catch (e) { return null; }
   }
 
+  // ---- Datamuse helpers: pos tag → short label, frequency → band, parse item -
+  const DM_POS = { n: "n.", v: "v.", adj: "adj.", adv: "adv.", u: "", prop: "" };
+  function posFromTags(tags) {
+    const t = (tags || []).find((x) => DM_POS[x] !== undefined);
+    return t ? DM_POS[t] : "";
+  }
+  // occurrences-per-million (Datamuse "f:") → frequency band, mirroring the extension
+  function bandOf(f) {
+    if (f >= 50) return { key: "common", cn: "常用" };
+    if (f >= 5) return { key: "mid", cn: "中频" };
+    if (f >= 0.4) return { key: "low", cn: "低频" };
+    return { key: "rare", cn: "生僻" };
+  }
+  function parseDm(it) {
+    let pos = "", def = "";
+    if (Array.isArray(it.defs) && it.defs[0]) {
+      const parts = it.defs[0].split("\t");
+      if (parts.length > 1) { pos = DM_POS[parts[0]] !== undefined ? DM_POS[parts[0]] : parts[0] + "."; def = parts[1]; }
+      else def = parts[0];
+      def = def.replace(/<[^>]+>/g, "").trim();
+    }
+    if (!pos) pos = posFromTags(it.tags);
+    let f = 0;
+    (it.tags || []).forEach((t) => { if (t.indexOf("f:") === 0) f = parseFloat(t.slice(2)) || 0; });
+    const b = bandOf(f);
+    return { word: it.word, pos, band: b.key, bandCn: b.cn, definition: def };
+  }
+  // Levenshtein distance (small words) — used to keep only genuine look-alikes
+  function lev(a, b) {
+    const m = a.length, n = b.length; if (Math.abs(m - n) > 2) return 9;
+    const d = Array.from({ length: m + 1 }, (_, i) => [i].concat(new Array(n).fill(0)));
+    for (let j = 0; j <= n; j++) d[0][j] = j;
+    for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++)
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    return d[m][n];
+  }
+  const dmURL = (rel, term, extra) => "https://api.datamuse.com/words?" + rel + "=" + encodeURIComponent(term) + (extra ? "&" + extra : "");
+  // function words to drop from collocations so we keep "make sure / make up", not "make a / make the"
+  const COLLO_STOP = new Set("a an the it its it's this that these those he she they them we you i my your his her our their of to in on at by for with from as is are was were be been being do does did have has had will would can could should may might must not no and or but so if then than too very".split(" "));
+
   async function fetchDatamuse(term) {
     const isPhrase = /\s/.test(term);
-    const out = { synonyms: [], family: [], lookalikes: [] };
+    const out = { synonyms: [], synonymsRich: [], family: [], lookalikes: [], collocations: [] };
+    // synonyms with each word's own pos / band / definition (近义辨析)
     try {
-      const syn = await withTimeout(jget("https://api.datamuse.com/words?max=6&ml=" + encodeURIComponent(term)), 6000, []);
-      out.synonyms = (syn || []).map((x) => x.word).filter((w) => w && w !== term).slice(0, 6);
+      const syn = await withTimeout(jget(dmURL("ml", term, "max=10&md=dpf")), 6000, []);
+      out.synonymsRich = (syn || []).filter((x) => x.word && x.word !== term).slice(0, 8).map(parseDm);
+      out.synonyms = out.synonymsRich.map((s) => s.word);
     } catch (e) {}
     if (!isPhrase) {
+      // word family — same root, different affixes, with pos
       try {
-        const fam = await withTimeout(jget("https://api.datamuse.com/words?max=8&rel_der=" + encodeURIComponent(term)), 6000, []);
-        out.family = (fam || []).map((x) => x.word).filter((w) => w && w !== term).slice(0, 8);
+        const fam = await withTimeout(jget(dmURL("rel_der", term, "max=12&md=p")), 6000, []);
+        out.family = (fam || []).filter((x) => x.word && x.word !== term).slice(0, 10)
+          .map((x) => ({ word: x.word, pos: posFromTags(x.tags) }));
       } catch (e) {}
+      // easily-confused look-alikes — sounds-like neighbours within edit distance 2
       try {
-        const sp = await withTimeout(jget("https://api.datamuse.com/words?max=6&md=d&sp=?" + encodeURIComponent(term).replace(/^./, term[0])), 5000, []);
+        const sl = await withTimeout(jget(dmURL("sl", term, "max=15&md=df")), 6000, []);
+        out.lookalikes = (sl || []).filter((x) => x.word && x.word !== term && lev(term, x.word) <= 2)
+          .slice(0, 6).map((x) => { const d = parseDm(x); return { word: x.word, definition: d.definition, cn: "" }; });
+      } catch (e) {}
+      // common collocations — words that frequently follow / precede this one
+      try {
+        const [after, before] = await Promise.all([
+          withTimeout(jget(dmURL("rel_bga", term, "max=6")), 5000, []),
+          withTimeout(jget(dmURL("rel_bgb", term, "max=6")), 5000, []),
+        ]);
+        const stop = COLLO_STOP;
+        const coll = [];
+        (after || []).filter((x) => !stop.has(x.word)).slice(0, 5).forEach((x) => coll.push({ phrase: term + " " + x.word }));
+        (before || []).filter((x) => !stop.has(x.word)).slice(0, 5).forEach((x) => coll.push({ phrase: x.word + " " + term }));
+        out.collocations = coll.slice(0, 8);
       } catch (e) {}
     }
     return out;
@@ -158,7 +217,7 @@
     const isPhrase = /\s/.test(term);
     const [dict, dm, cn] = await Promise.all([
       isPhrase ? Promise.resolve(null) : withTimeout(fetchDictionary(term), 8000, null),
-      withTimeout(fetchDatamuse(term), 8000, { synonyms: [], family: [], lookalikes: [] }),
+      withTimeout(fetchDatamuse(term), 8000, { synonyms: [], synonymsRich: [], family: [], lookalikes: [], collocations: [] }),
       getSettings().chinese ? withTimeout(fetchCn(term), 7000, "") : Promise.resolve(""),
     ]);
     const meanings = [];
@@ -179,7 +238,8 @@
       phonetic: (dict && dict.phonetic) || "",
       audioUs: (dict && dict.audioUs) || "", audioUk: (dict && dict.audioUk) || "",
       meanings, examples, morph,
-      synonyms: dm.synonyms, family: dm.family, suggestions,
+      synonyms: dm.synonyms, synonymsRich: dm.synonymsRich, family: dm.family,
+      lookalikes: dm.lookalikes, collocations: dm.collocations, suggestions,
     };
   }
 
@@ -212,19 +272,45 @@
           p.suggestions.map((s) => `<div class="item" data-look="${esc(s.word)}"><span class="w serif">${esc(s.word)}</span><span class="meta">${esc(s.definition)}</span></div>`).join("") + `</div>`;
       } else h += `<div class="card muted">没有找到释义。</div>`;
     }
+    // highlight the headword inside example sentences
+    const hi = (txt) => {
+      try {
+        const re = new RegExp("\\b(" + p.term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+") + "\\w*)", "ig");
+        return esc(txt).replace(re, "<mark>$1</mark>");
+      } catch (e) { return esc(txt); }
+    };
+    // 释义 (memory-first)
     if (p.meanings.length) {
       h += `<div class="card"><h2 class="sec">释义</h2>` + p.meanings.map((m) =>
         `<div class="mean">${m.pos ? `<span class="pos">${esc(m.pos)}</span> ` : ""}<span class="def">${esc(m.definition)}</span>${m.cn ? `<div class="cn">${esc(m.cn)}</div>` : ""}</div>`).join("") + `</div>`;
     }
+    // 例句
     if (p.examples && p.examples.length && (opts.examples !== false)) {
       h += `<div class="card"><h2 class="sec">例句</h2>` + p.examples.map((e) =>
-        `<div class="ex">${esc(e.text)}${e.translation ? `<div class="tr">${esc(e.translation)}</div>` : ""}</div>`).join("") + `</div>`;
+        `<div class="ex">${hi(e.text)}${e.translation ? `<div class="tr">${esc(e.translation)}</div>` : ""}</div>`).join("") + `</div>`;
     }
+    // 常用搭配 (collocations)
+    if (p.collocations && p.collocations.length) {
+      h += `<div class="card"><h2 class="sec">常用搭配</h2><div class="row">` +
+        p.collocations.map((c) => { const ph = c.phrase || c; return `<span class="chip" data-look="${esc(ph)}">${esc(ph)}</span>`; }).join("") + `</div></div>`;
+    }
+    // 词根拆解
     h += morphHTML(p.morph);
+    // 词族 (with pos)
     if (p.family && p.family.length) h += `<div class="card"><h2 class="sec">词族</h2><div class="row">` +
-      p.family.map((w) => `<span class="chip" data-look="${esc(w)}">${esc(w)}</span>`).join("") + `</div></div>`;
-    if (p.synonyms && p.synonyms.length) h += `<div class="card"><h2 class="sec">近义词</h2><div class="row">` +
-      p.synonyms.map((w) => `<span class="chip" data-look="${esc(w)}">${esc(w)}</span>`).join("") + `</div></div>`;
+      p.family.map((f) => { const w = f.word || f; const pos = f.pos ? ` <small>${esc(f.pos)}</small>` : ""; return `<span class="chip" data-look="${esc(w)}">${esc(w)}${pos}</span>`; }).join("") + `</div></div>`;
+    // 近义辨析 — each synonym with its own pos / band / definition
+    const synRich = (p.synonymsRich && p.synonymsRich.length) ? p.synonymsRich
+      : (p.synonyms || []).map((w) => ({ word: w }));
+    if (synRich.length) {
+      h += `<div class="card"><h2 class="sec">近义辨析</h2>` + synRich.map((s) =>
+        `<div class="syn"><div class="syn-h"><button class="syn-w" data-look="${esc(s.word)}">${esc(s.word)}</button>${s.pos ? `<span class="pos">${esc(s.pos)}</span>` : ""}${s.band ? `<span class="mfreq freq-${s.band}">${esc(s.bandCn || "")}</span>` : ""}</div>${s.definition ? `<div class="syn-d">${esc(s.definition)}${s.cn ? ` · ${esc(s.cn)}` : ""}</div>` : ""}</div>`).join("") + `</div>`;
+    }
+    // 形近词 (easily confused)
+    if (p.lookalikes && p.lookalikes.length) {
+      h += `<div class="card"><h2 class="sec">形近词</h2>` + p.lookalikes.map((c) =>
+        `<div class="conf"><button class="conf-w" data-look="${esc(c.word)}">${esc(c.word)}</button><span class="conf-d">${esc(c.definition || c.cn || "")}</span></div>`).join("") + `</div>`;
+    }
     return h;
   }
   function wireCard(root) {
@@ -245,7 +331,8 @@
       data: {
         phonetic: p.phonetic, audioUs: p.audioUs, audioUk: p.audioUk, cn: p.cn,
         meanings: p.meanings, examples: p.examples, morph: p.morph,
-        synonyms: p.synonyms, family: p.family, isPhrase: p.isPhrase,
+        synonyms: p.synonyms, synonymsRich: p.synonymsRich, family: p.family,
+        lookalikes: p.lookalikes, collocations: p.collocations, isPhrase: p.isPhrase,
       },
       srs: { due: now(), interval: 0, ease: 2.5, reps: 0, lapses: 0, last: 0 },
     });
@@ -256,7 +343,8 @@
   function wordToPreview(w) {
     const d = w.data || {};
     return { term: w.word, isPhrase: d.isPhrase, cn: d.cn, phonetic: d.phonetic, audioUs: d.audioUs, audioUk: d.audioUk,
-      meanings: d.meanings || [], examples: d.examples || [], morph: d.morph, synonyms: d.synonyms || [], family: d.family || [] };
+      meanings: d.meanings || [], examples: d.examples || [], morph: d.morph, synonyms: d.synonyms || [],
+      synonymsRich: d.synonymsRich || [], family: d.family || [], lookalikes: d.lookalikes || [], collocations: d.collocations || [], extraLoaded: true };
   }
 
   // ---- SRS (ported from extension app.js) -------------------------------
