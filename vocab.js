@@ -210,4 +210,69 @@ function lexisIdiomScene(term) {
   return LEXIS_IDIOM_SCENE[String(term || "").toLowerCase()] || null;
 }
 
-if (typeof window !== "undefined") { window.LEXIS_SEED = LEXIS_SEED; window.LEXIS_SEED_FLAT = LEXIS_SEED_FLAT; window.LEXIS_FREQ = LEXIS_FREQ; window.LEXIS_COMMON = LEXIS_COMMON; window.LEXIS_MORPH = LEXIS_MORPH; window.lexisAnalyzeMorph = lexisAnalyzeMorph; window.lexisWordDomain = lexisWordDomain; window.LEXIS_SCENE_CN = LEXIS_SCENE_CN; window.lexisIdiomScene = lexisIdiomScene; window.LEXIS_PHRASE_SEED = LEXIS_PHRASE_SEED; window.LEXIS_PHRASE_SEED_FLAT = LEXIS_PHRASE_SEED_FLAT; window.lexisPhraseScene = lexisPhraseScene; }
+// ---- plural → singular ------------------------------------------------
+// Selections drag in the sentence's inflected form ("temples"); the notebook
+// wants the lemma ("temple"). Conservative on purpose: words that only look
+// plural (news, analysis, business) and plural-only nouns are left alone.
+var LEXIS_NEVER_SINGULAR = new Set(
+  ("news mathematics physics economics politics statistics ethics athletics aerobics linguistics " +
+   "series species means species headquarters measles billiards darts scissors glasses clothes " +
+   "thanks belongings savings surroundings outskirts premises goods odds regards riches stairs " +
+   "always perhaps sometimes towards besides unless plus versus bus gas lens bias campus virus " +
+   "status focus census bonus chorus circus surplus consensus this his its us yes was has does " +
+   "class glass grass press cross loss less across various serious previous obvious famous").split(" ")
+);
+var LEXIS_IRREGULAR_PLURAL = {
+  children: "child", people: "person", men: "man", women: "woman", feet: "foot",
+  teeth: "tooth", geese: "goose", mice: "mouse", lice: "louse", oxen: "ox",
+  criteria: "criterion", phenomena: "phenomenon", curricula: "curriculum",
+  analyses: "analysis", crises: "crisis", theses: "thesis", diagnoses: "diagnosis",
+  hypotheses: "hypothesis", parentheses: "parenthesis", bases: "basis",
+  indices: "index", matrices: "matrix", appendices: "appendix", vertices: "vertex",
+  media: "medium", bacteria: "bacterium", stimuli: "stimulus", alumni: "alumnus",
+  fungi: "fungus", nuclei: "nucleus", radii: "radius", axes: "axis",
+};
+
+// pool of known singular lemmas, used to sanity-check a stripped form
+var LEXIS_LEMMA_POOL = (function () {
+  var s = new Set();
+  try {
+    LEXIS_FREQ.forEach(function (r) { s.add(r.term); });
+    LEXIS_COMMON.forEach(function (w) { s.add(w); });
+    (LEXIS_SEED_FLAT || []).forEach(function (r) { s.add((r.term || r).toLowerCase()); });
+  } catch (e) {}
+  return s;
+})();
+
+// Returns the singular form, or null when the word should be left as-is.
+// Single words only — phrases ("human rights") are never touched.
+function lexisSingularize(word) {
+  var w = String(word || "").trim();
+  if (!w || /\s/.test(w)) return null;
+  var l = w.toLowerCase();
+  if (LEXIS_NEVER_SINGULAR.has(l)) return null;
+  // irregulars first — many (children, mice, criteria) don't end in -s at all
+  if (LEXIS_IRREGULAR_PLURAL[l]) return LEXIS_IRREGULAR_PLURAL[l];
+  if (!/s$/.test(l) || l.length < 4) return null;
+  // -ss / -us / -is are almost never regular plurals
+  if (/(ss|us|is)$/.test(l)) return null;
+
+  var cand = null;
+  if (/ies$/.test(l) && l.length > 4) cand = l.slice(0, -3) + "y";       // studies → study
+  else if (/ves$/.test(l)) {                                             // knives → knife
+    var stem = l.slice(0, -3);
+    cand = LEXIS_LEMMA_POOL.has(stem + "fe") ? stem + "fe" : stem + "f";
+  }
+  else if (/(ch|sh|x|z|s)es$/.test(l)) cand = l.slice(0, -2);            // boxes → box
+  else if (/oes$/.test(l)) cand = l.slice(0, -2);                        // heroes → hero
+  else cand = l.slice(0, -1);                                            // temples → temple
+  if (!cand || cand.length < 2 || cand === l) return null;
+
+  // Trust the pool when it knows either form; otherwise accept the strip only
+  // for the plain -s case, which is the one that's safe to guess.
+  if (LEXIS_LEMMA_POOL.has(cand)) return cand;
+  if (LEXIS_LEMMA_POOL.has(l)) return null;   // the -s form is itself a lemma
+  return /[^aeiou]s$/.test(l) ? cand : null;
+}
+
+if (typeof window !== "undefined") { window.LEXIS_SEED = LEXIS_SEED; window.LEXIS_SEED_FLAT = LEXIS_SEED_FLAT; window.LEXIS_FREQ = LEXIS_FREQ; window.LEXIS_COMMON = LEXIS_COMMON; window.LEXIS_MORPH = LEXIS_MORPH; window.lexisAnalyzeMorph = lexisAnalyzeMorph; window.lexisWordDomain = lexisWordDomain; window.LEXIS_SCENE_CN = LEXIS_SCENE_CN; window.lexisIdiomScene = lexisIdiomScene; window.LEXIS_PHRASE_SEED = LEXIS_PHRASE_SEED; window.LEXIS_PHRASE_SEED_FLAT = LEXIS_PHRASE_SEED_FLAT; window.lexisPhraseScene = lexisPhraseScene; window.lexisSingularize = lexisSingularize; }

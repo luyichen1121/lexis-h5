@@ -19,8 +19,53 @@
   const DEFAULT_SETTINGS = { chinese: true, dailyNewLimit: 15, showExamples: true, gistToken: "", gistId: "" };
   function load(k, fb) { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? fb : v; } catch (e) { return fb; } }
   function save(k, v) { localStorage.setItem(k, JSON.stringify(v)); }
-  const getWords = () => load(K.words, []);
+  // Strip punctuation a selection dragged in ("word," / “word” / (word).),
+  // keeping word-internal apostrophes & hyphens (don't, well-known).
+  function cleanTerm(s) {
+    return String(s || "")
+      .replace(/\s+/g, " ")
+      .replace(/^[\s"'“”‘’(){}\[\]«»¡¿.,;:!?…·—–\-]+/, "")
+      .replace(/[\s"'“”‘’(){}\[\]«»…·—–\-.,;:!?]+$/, "")
+      .trim();
+  }
+
+  // punctuation + plural → singular (see lexisSingularize in vocab.js)
+  function normTerm(s) {
+    const t = cleanTerm(s);
+    const one = typeof lexisSingularize === "function" ? lexisSingularize(t) : null;
+    if (!one) return t;
+    return /^[A-Z]/.test(t) ? one.charAt(0).toUpperCase() + one.slice(1) : one;
+  }
+
   const setWords = (w) => save(K.words, w);
+  // One-time sweep: clean stray punctuation off saved headwords, folding any
+  // collision into the entry that already owns the cleaned term.
+  function getWords() {
+    const words = load(K.words, []);
+    const byLookup = new Map();
+    words.forEach((w) => { if (w.lookup) byLookup.set(w.lookup, w); });
+    let changed = 0;
+    const drop = new Set();
+    for (const w of words) {
+      const clean = normTerm(w.word);
+      if (!clean || clean === w.word) continue;
+      const lk = clean.toLowerCase().trim();
+      const dupe = byLookup.get(lk);
+      if (dupe && dupe !== w) {
+        dupe.sightings = (dupe.sightings || []).concat(
+          [{ context: w.context, url: w.url, title: w.title, at: w.createdAt }],
+          w.sightings || []
+        );
+        drop.add(w.id);
+      } else {
+        w.word = clean; w.lookup = lk; byLookup.set(lk, w);
+      }
+      changed++;
+    }
+    const out = drop.size ? words.filter((w) => !drop.has(w.id)) : words;
+    if (changed) setWords(out);
+    return out;
+  }
   const getSettings = () => Object.assign({}, DEFAULT_SETTINGS, load(K.settings, {}));
   const setSettings = (s) => save(K.settings, s);
   const getAssess = () => load(K.assess, { known: [], level: null, estVocab: 0 });
@@ -257,8 +302,10 @@
         <input id="q" placeholder="输入单词或短语…" autocomplete="off" autocapitalize="off" spellcheck="false">
         <button class="btn primary" type="submit">查</button>
       </form>
+      <div class="row" style="margin-top:8px"><button class="btn sage" id="pasteBtn" style="width:100%">📋 粘贴保存(从剪贴板)</button></div>
       <div id="result"></div>`;
     $("#sform").addEventListener("submit", (e) => { e.preventDefault(); doLookup($("#q").value); });
+    $("#pasteBtn").addEventListener("click", pasteAndSave);
     const recent = getWords().slice(0, 8);
     if (recent.length) $("#result").innerHTML =
       `<h2 class="sec">最近保存</h2>` + recent.map((w) =>
@@ -333,12 +380,34 @@
     if (!w) return;
     view.innerHTML = `<div class="row" style="margin-bottom:12px">
         <button class="btn" id="back">← 返回</button>
-        <button class="btn" id="del" style="margin-left:auto">删除</button>
+        <button class="btn" id="edit" style="margin-left:auto">编辑词条</button>
+        <button class="btn" id="del">删除</button>
       </div><div id="det"></div>`;
     $("#det").innerHTML = cardHTML(wordToPreview(w), { examples: getSettings().showExamples });
     wireCard($("#det"));
     $("#back").addEventListener("click", () => go(current === "lookup" ? "lookup" : "notebook"));
     $("#del").addEventListener("click", () => { if (confirm("删除 “" + w.word + "”？")) { removeWord(id); toast("已删除"); go("notebook"); } });
+    $("#edit").addEventListener("click", async () => {
+      const next = cleanTerm(prompt("修改词条：", w.word) || "");
+      if (!next || next === w.word) return;
+      toast("正在重新查询…");
+      const p = await lookup(next);           // refetch meanings for the new term
+      const words = getWords();
+      const rec = words.find((x) => x.id === id);
+      if (!rec) return;
+      rec.word = p.term || next;
+      rec.lookup = norm(rec.word);
+      rec.updatedAt = now();
+      rec.status = (p.meanings || []).length || p.cn ? "ready" : "notfound";
+      rec.data = Object.assign({}, rec.data, {
+        phonetic: p.phonetic, audioUs: p.audioUs, audioUk: p.audioUk, cn: p.cn,
+        meanings: p.meanings, examples: p.examples, morph: p.morph,
+        synonyms: p.synonyms, family: p.family, isPhrase: p.isPhrase,
+      });
+      setWords(words);
+      toast("已更新");
+      openDetail(id);
+    });
   }
 
   // ---- REVIEW ----
@@ -718,6 +787,21 @@
     toast("已保存 <b>" + esc(term) + "</b>");
     refreshBadge();
     if (box) doLookup(term);
+  }
+
+  // ---- paste from clipboard → look up → save (no shortcut needed) -------
+  async function pasteAndSave() {
+    let text = "";
+    try {
+      if (navigator.clipboard && navigator.clipboard.readText) text = await navigator.clipboard.readText();
+    } catch (e) { text = ""; }
+    text = (text || "").trim();
+    if (!text) { toast("剪贴板是空的,先在别的 App 里拷贝一个单词"); return; }
+    // keep it sane: strip surrounding punctuation; cap overly long clipboard to first ~6 words
+    let term = text.replace(/^[^A-Za-z]+|[^A-Za-z]+$/g, "").split(/\s+/).slice(0, 6).join(" ").trim();
+    if (!term) { toast("剪贴板里没有可保存的英文词"); return; }
+    if (current !== "lookup") go("lookup");
+    autoAdd(term);
   }
 
   // ---- boot ----
