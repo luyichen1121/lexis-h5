@@ -132,3 +132,9 @@ label.set{display:flex;justify-content:space-between;align-items:center;padding:
 label.set:last-child{border:0}
 input[type=text],input[type=number]{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px;background:var(--card);color:var(--ink)}
 select{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px;background:var(--card)}
+
+/* tap-to-pick word from a pasted sentence (paste-to-save) */
+.pick-sentence{line-height:2}
+.pickw{cursor:pointer;padding:1px 3px;border-radius:4px;text-decoration:underline;
+  text-decoration-color:var(--line);text-underline-offset:3px}
+.pickw:active{background:var(--clay);color:#fff}

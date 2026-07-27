@@ -240,6 +240,7 @@
     words.unshift({
       id: "w" + now() + Math.random().toString(36).slice(2, 6),
       word: p.term, lookup: p.term, createdAt: now(), updatedAt: now(),
+      context: p.context || "",
       status: p.meanings.length || p.cn ? "ready" : "notfound",
       data: {
         phonetic: p.phonetic, audioUs: p.audioUs, audioUk: p.audioUk, cn: p.cn,
@@ -375,6 +376,18 @@
     box.querySelectorAll("[data-open]").forEach((n) => n.addEventListener("click", () => openDetail(n.dataset.open)));
   }
 
+  // original-sentence card for the saved-word detail (highlights the headword)
+  function contextCardHTML(w) {
+    const ctx = (w.context || "").trim();
+    if (!ctx) return "";
+    let body = esc(ctx);
+    try {
+      const re = new RegExp("(" + w.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "ig");
+      body = esc(ctx).replace(re, "<mark>$1</mark>");
+    } catch (e) {}
+    return `<div class="card"><h2 class="sec">原句语境</h2><div class="ex">${body}</div></div>`;
+  }
+
   function openDetail(id) {
     const w = getWords().find((x) => x.id === id);
     if (!w) return;
@@ -383,7 +396,7 @@
         <button class="btn" id="edit" style="margin-left:auto">编辑词条</button>
         <button class="btn" id="del">删除</button>
       </div><div id="det"></div>`;
-    $("#det").innerHTML = cardHTML(wordToPreview(w), { examples: getSettings().showExamples });
+    $("#det").innerHTML = cardHTML(wordToPreview(w), { examples: getSettings().showExamples }) + contextCardHTML(w);
     wireCard($("#det"));
     $("#back").addEventListener("click", () => go(current === "lookup" ? "lookup" : "notebook"));
     $("#del").addEventListener("click", () => { if (confirm("删除 “" + w.word + "”？")) { removeWord(id); toast("已删除"); go("notebook"); } });
@@ -771,20 +784,24 @@
   }
 
   // ---- quick-add from share sheet / shortcut: ?add=word ----------------
-  async function autoAdd(rawTerm) {
+  async function autoAdd(rawTerm, context) {
     const term = norm(rawTerm);
     if (!term) return;
+    const ctx = (context || "").trim();
     const box = $("#result");
     if ($("#q")) $("#q").value = term;
     if (box) box.innerHTML = `<div class="empty"><span class="spin"></span> 正在保存 <b>${esc(term)}</b>…</div>`;
     if (findWord(term)) {
+      // already saved — just attach this new sighting's context if we have one
+      if (ctx) { const ws = getWords(); const rec = ws.find((w) => w.lookup === term); if (rec && !rec.context) { rec.context = ctx; rec.updatedAt = now(); setWords(ws); } }
       toast("已经在生词本里了");
       if (box) doLookup(term);
       return;
     }
     const p = await lookup(term);
+    p.context = ctx;
     saveWord(p);
-    toast("已保存 <b>" + esc(term) + "</b>");
+    toast(ctx ? "已保存 <b>" + esc(term) + "</b>(含原句)" : "已保存 <b>" + esc(term) + "</b>");
     refreshBadge();
     if (box) doLookup(term);
   }
@@ -796,12 +813,25 @@
       if (navigator.clipboard && navigator.clipboard.readText) text = await navigator.clipboard.readText();
     } catch (e) { text = ""; }
     text = (text || "").trim();
-    if (!text) { toast("剪贴板是空的,先在别的 App 里拷贝一个单词"); return; }
-    // keep it sane: strip surrounding punctuation; cap overly long clipboard to first ~6 words
-    let term = text.replace(/^[^A-Za-z]+|[^A-Za-z]+$/g, "").split(/\s+/).slice(0, 6).join(" ").trim();
-    if (!term) { toast("剪贴板里没有可保存的英文词"); return; }
+    if (!text) { toast("剪贴板是空的,先在别的 App 里拷贝一个单词或一句话"); return; }
     if (current !== "lookup") go("lookup");
-    autoAdd(term);
+    const alphaWords = text.match(/[A-Za-z][A-Za-z'’-]*/g) || [];
+    if (!alphaWords.length) { toast("剪贴板里没有英文词"); return; }
+    // single word → save straight away; a sentence → let you tap the target word
+    if (alphaWords.length === 1) { autoAdd(alphaWords[0], ""); return; }
+    showWordPicker(text, alphaWords);
+  }
+
+  // paste of a whole sentence: tap the target word → save it with the sentence as 原句
+  function showWordPicker(sentence, words) {
+    const box = $("#result"); if (!box) return;
+    const html = esc(sentence).replace(/[A-Za-z][A-Za-z'’-]*/g, (m) => `<span class="pickw" data-w="${esc(m)}">${m}</span>`);
+    box.innerHTML = `<div class="card"><h2 class="sec">点选要保存的词</h2>
+      <div class="ex pick-sentence">${html}</div>
+      <p class="muted" style="font-size:12px;margin-top:8px">点句中任意词即可保存,并把整句作为原句语境;短语请点「整句保存」。</p>
+      <div class="row" style="margin-top:10px"><button class="btn" id="pickPhrase">整句作为短语保存</button></div></div>`;
+    box.querySelectorAll(".pickw").forEach((n) => n.addEventListener("click", () => autoAdd(n.dataset.w, sentence)));
+    const pp = $("#pickPhrase"); if (pp) pp.addEventListener("click", () => autoAdd(sentence, sentence));
   }
 
   // ---- boot ----
@@ -809,9 +839,10 @@
   go("lookup");
   refreshBadge();
   try {
-    const add = new URLSearchParams(location.search).get("add");
+    const qs = new URLSearchParams(location.search);
+    const add = qs.get("add");
     if (add) {
-      autoAdd(add);
+      autoAdd(add, qs.get("ctx") || ""); // optional &ctx= carries the original sentence
       // clean the URL so a refresh doesn't re-add
       history.replaceState(null, "", location.pathname);
     }
