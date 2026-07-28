@@ -407,22 +407,27 @@
     view.querySelectorAll("[data-open]").forEach((n) => n.addEventListener("click", () => openDetail(n.dataset.open)));
   }
 
-  async function doLookup(term) {
+  // ctx = the sentence the word came from, when the caller has one (?q=&ctx=,
+  // mirroring the extension's #look/<term>/<context>). It is shown above the
+  // card AND carried into saveWord, so 原句语境 survives the save.
+  async function doLookup(term, ctx) {
     term = norm(term);
     if (!term) return;
     const q = $("#q"); if (q) q.value = term;
     const box = $("#result");
     box.innerHTML = `<div class="empty"><span class="spin"></span> 查询中…</div>`;
     const p = await lookup(term);
+    if (ctx) p.context = ctx;
     const saved = !!findWord(term);
     const saveBtn = saved
       ? `<button class="btn" id="savedBtn" disabled>已在生词本</button>`
       : `<button class="btn sage" id="saveBtn">保存到生词本</button>`;
-    box.innerHTML = cardHTML(p, { saveBtn });
+    const ctxCard = ctx ? contextCardHTML({ word: p.term || term, context: ctx, createdAt: now() }) : "";
+    box.innerHTML = ctxCard + cardHTML(p, { saveBtn });
     wireCard(box);
     const sb = $("#saveBtn");
     if (sb) sb.addEventListener("click", () => {
-      if (saveWord(p)) { toast("已保存 <b>" + esc(p.term) + "</b>"); doLookup(term); refreshBadge(); }
+      if (saveWord(p)) { toast("已保存 <b>" + esc(p.term) + "</b>"); doLookup(term, ctx); refreshBadge(); }
       else toast("已经在生词本里了");
     });
   }
@@ -983,7 +988,7 @@
     }
     // ?q=<term> — look up WITHOUT saving (mirrors the extension's #look/<term> deep link)
     const q = (qs.get("q") || "").trim();
-    if (!add && q) { go("lookup"); doLookup(q); }
+    if (!add && q) { go("lookup"); doLookup(q, (qs.get("ctx") || "").trim()); }
   } catch (e) {}
 
   // auto-sync: pull the shared gist on open, and again whenever the app regains focus
