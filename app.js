@@ -936,5 +936,8 @@
       // clean the URL so a refresh doesn't re-add
       history.replaceState(null, "", location.pathname);
     }
+    // ?q=<term> — look up WITHOUT saving (mirrors the extension's #look/<term> deep link)
+    const q = (qs.get("q") || "").trim();
+    if (!add && q) { go("lookup"); doLookup(q); }
   } catch (e) {}
 })();
