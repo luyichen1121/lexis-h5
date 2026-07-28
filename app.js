@@ -330,6 +330,8 @@
       id: "w" + now() + Math.random().toString(36).slice(2, 6),
       word: p.term, lookup: p.term, createdAt: now(), updatedAt: now(),
       context: p.context || "",
+      // every original sentence is kept as a dated sighting so past examples never get lost
+      sightings: p.context ? [{ context: p.context, at: now(), source: p.source || "粘贴保存" }] : [],
       status: p.meanings.length || p.cn ? "ready" : "notfound",
       data: {
         phonetic: p.phonetic, audioUs: p.audioUs, audioUk: p.audioUk, cn: p.cn,
@@ -467,16 +469,21 @@
     box.querySelectorAll("[data-open]").forEach((n) => n.addEventListener("click", () => openDetail(n.dataset.open)));
   }
 
-  // original-sentence card for the saved-word detail (highlights the headword)
+  // original-sentence card for the saved-word detail — shows every kept sighting
+  // (each with its saved date + source label), headword highlighted.
   function contextCardHTML(w) {
-    const ctx = (w.context || "").trim();
-    if (!ctx) return "";
-    let body = esc(ctx);
-    try {
-      const re = new RegExp("(" + w.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "ig");
-      body = esc(ctx).replace(re, "<mark>$1</mark>");
-    } catch (e) {}
-    return `<div class="card"><h2 class="sec">原句语境</h2><div class="ex">${body}</div></div>`;
+    let list = (w.sightings && w.sightings.length)
+      ? w.sightings.slice()
+      : ((w.context || "").trim() ? [{ context: w.context, at: w.createdAt, source: "" }] : []);
+    list = list.filter((s) => (s.context || "").trim());
+    if (!list.length) return "";
+    const hi = (t) => { try { return esc(t).replace(new RegExp("(" + w.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "ig"), "<mark>$1</mark>"); } catch (e) { return esc(t); } };
+    const fmt = (at) => { try { const d = new Date(at); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); } catch (e) { return ""; } };
+    const rows = list.map((s) => {
+      const meta = [s.source, s.at ? fmt(s.at) : ""].filter(Boolean).join(" · ");
+      return `<div class="ex">${hi(s.context)}${meta ? `<div class="src">来源:${esc(meta)}</div>` : ""}</div>`;
+    }).join("");
+    return `<div class="card"><h2 class="sec">原句语境${list.length > 1 ? ` · ${list.length}` : ""}</h2>${rows}</div>`;
   }
 
   function openDetail(id) {
@@ -899,22 +906,35 @@
   }
 
   // ---- quick-add from share sheet / shortcut: ?add=word ----------------
-  async function autoAdd(rawTerm, context) {
+  async function autoAdd(rawTerm, context, source) {
     const term = norm(rawTerm);
     if (!term) return;
     const ctx = (context || "").trim();
+    const src = (source || "").trim() || "粘贴保存";
     const box = $("#result");
     if ($("#q")) $("#q").value = term;
     if (box) box.innerHTML = `<div class="empty"><span class="spin"></span> 正在保存 <b>${esc(term)}</b>…</div>`;
     if (findWord(term)) {
-      // already saved — just attach this new sighting's context if we have one
-      if (ctx) { const ws = getWords(); const rec = ws.find((w) => w.lookup === term); if (rec && !rec.context) { rec.context = ctx; rec.updatedAt = now(); setWords(ws); } }
+      // already saved — append this new original sentence as another dated sighting
+      if (ctx) {
+        const ws = getWords(); const rec = ws.find((w) => w.lookup === term);
+        if (rec) {
+          rec.sightings = rec.sightings || (rec.context ? [{ context: rec.context, at: rec.createdAt || now(), source: src }] : []);
+          if (!rec.sightings.some((s) => (s.context || "").trim() === ctx)) {
+            rec.sightings.unshift({ context: ctx, at: now(), source: src });
+            if (!rec.context) rec.context = ctx;
+            rec.updatedAt = now(); setWords(ws);
+            toast("已添加一条原句到 <b>" + esc(term) + "</b>");
+            if (box) doLookup(term); return;
+          }
+        }
+      }
       toast("已经在生词本里了");
       if (box) doLookup(term);
       return;
     }
     const p = await lookup(term);
-    p.context = ctx;
+    p.context = ctx; p.source = src;
     saveWord(p);
     toast(ctx ? "已保存 <b>" + esc(term) + "</b>(含原句)" : "已保存 <b>" + esc(term) + "</b>");
     refreshBadge();
@@ -957,7 +977,7 @@
     const qs = new URLSearchParams(location.search);
     const add = qs.get("add");
     if (add) {
-      autoAdd(add, qs.get("ctx") || ""); // optional &ctx= carries the original sentence
+      autoAdd(add, qs.get("ctx") || "", qs.get("src") || ""); // optional &ctx= sentence, &src= source label
       // clean the URL so a refresh doesn't re-add
       history.replaceState(null, "", location.pathname);
     }

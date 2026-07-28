@@ -157,3 +157,6 @@ select{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size
 .conf-w{border:0;background:none;padding:0;font-size:15px;color:var(--clay);cursor:pointer;font-weight:600;white-space:nowrap}
 .conf-d{color:var(--ink2);font-size:13px;line-height:1.5}
 .chip small{color:var(--sage);font-style:italic}
+
+/* original-sentence source line (原句语境) */
+.src{font-size:11px;color:var(--ink2);margin-top:4px;opacity:.85}
