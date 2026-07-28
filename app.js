@@ -418,17 +418,32 @@
     box.innerHTML = `<div class="empty"><span class="spin"></span> 查询中…</div>`;
     const p = await lookup(term);
     if (ctx) p.context = ctx;
-    const saved = !!findWord(term);
-    const saveBtn = saved
-      ? `<button class="btn" id="savedBtn" disabled>已在生词本</button>`
-      : `<button class="btn sage" id="saveBtn">保存到生词本</button>`;
+    const existing = findWord(term);
+    // is this exact sentence already recorded on the saved word?
+    const ctxKnown = !ctx || (existing && (existing.sightings || []).some((s) => (s.context || "").trim() === ctx) || (existing && (existing.context || "").trim() === ctx));
+    let saveBtn;
+    if (!existing) saveBtn = `<button class="btn sage" id="saveBtn">保存到生词本</button>`;
+    else if (ctx && !ctxKnown) saveBtn = `<button class="btn sage" id="appendBtn">＋ 添加此原句</button>`;
+    else saveBtn = `<button class="btn" id="savedBtn" disabled>已在生词本</button>`;
     const ctxCard = ctx ? contextCardHTML({ word: p.term || term, context: ctx, createdAt: now() }) : "";
     box.innerHTML = ctxCard + cardHTML(p, { saveBtn });
     wireCard(box);
     const sb = $("#saveBtn");
     if (sb) sb.addEventListener("click", () => {
-      if (saveWord(p)) { toast("已保存 <b>" + esc(p.term) + "</b>"); doLookup(term, ctx); refreshBadge(); }
+      if (ctx) p.source = "粘贴保存";
+      if (saveWord(p)) { toast(ctx ? "已保存 <b>" + esc(p.term) + "</b>(含原句)" : "已保存 <b>" + esc(p.term) + "</b>"); doLookup(term, ctx); refreshBadge(); }
       else toast("已经在生词本里了");
+    });
+    const ab = $("#appendBtn");
+    if (ab) ab.addEventListener("click", () => {
+      const ws = getWords(); const rec = ws.find((w) => w.lookup === term);
+      if (!rec) return;
+      rec.sightings = rec.sightings || (rec.context ? [{ context: rec.context, at: rec.createdAt || now(), source: "粘贴保存" }] : []);
+      rec.sightings.unshift({ context: ctx, at: now(), source: "粘贴保存" });
+      if (!rec.context) rec.context = ctx;
+      rec.updatedAt = now(); setWords(ws); refreshBadge();
+      toast("已添加原句到 <b>" + esc(term) + "</b>");
+      doLookup(term, ctx);
     });
   }
 
@@ -957,21 +972,22 @@
     if (current !== "lookup") go("lookup");
     const alphaWords = text.match(/[A-Za-z][A-Za-z'’-]*/g) || [];
     if (!alphaWords.length) { toast("剪贴板里没有英文词"); return; }
-    // single word → save straight away; a sentence → let you tap the target word
-    if (alphaWords.length === 1) { autoAdd(alphaWords[0], ""); return; }
+    // single word → look it up first (Save button on the card); a sentence → tap the target word
+    if (alphaWords.length === 1) { doLookup(alphaWords[0]); return; }
     showWordPicker(text, alphaWords);
   }
 
-  // paste of a whole sentence: tap the target word → save it with the sentence as 原句
+  // paste of a whole sentence: tap the target word → LOOK IT UP (with the sentence as 原句),
+  // then decide to save from the card. Phrase → look up the whole selection.
   function showWordPicker(sentence, words) {
     const box = $("#result"); if (!box) return;
     const html = esc(sentence).replace(/[A-Za-z][A-Za-z'’-]*/g, (m) => `<span class="pickw" data-w="${esc(m)}">${m}</span>`);
-    box.innerHTML = `<div class="card"><h2 class="sec">点选要保存的词</h2>
+    box.innerHTML = `<div class="card"><h2 class="sec">点选要查的词</h2>
       <div class="ex pick-sentence">${html}</div>
-      <p class="muted" style="font-size:12px;margin-top:8px">点句中任意词即可保存,并把整句作为原句语境;短语请点「整句保存」。</p>
-      <div class="row" style="margin-top:10px"><button class="btn" id="pickPhrase">整句作为短语保存</button></div></div>`;
-    box.querySelectorAll(".pickw").forEach((n) => n.addEventListener("click", () => autoAdd(n.dataset.w, sentence)));
-    const pp = $("#pickPhrase"); if (pp) pp.addEventListener("click", () => autoAdd(sentence, sentence));
+      <p class="muted" style="font-size:12px;margin-top:8px">点句中任意词先查看释义,再决定保存(整句会作为原句语境一并保存);短语请点「整句查询」。</p>
+      <div class="row" style="margin-top:10px"><button class="btn" id="pickPhrase">整句作为短语查询</button></div></div>`;
+    box.querySelectorAll(".pickw").forEach((n) => n.addEventListener("click", () => doLookup(n.dataset.w, sentence)));
+    const pp = $("#pickPhrase"); if (pp) pp.addEventListener("click", () => doLookup(sentence, sentence));
   }
 
   // ---- boot ----
