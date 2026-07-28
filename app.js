@@ -37,7 +37,8 @@
     return /^[A-Z]/.test(t) ? one.charAt(0).toUpperCase() + one.slice(1) : one;
   }
 
-  const setWords = (w) => save(K.words, w);
+  let _suppressAutoSync = false; // true while syncNow writes merged data, so we don't loop
+  const setWords = (w) => { save(K.words, w); if (!_suppressAutoSync) scheduleAutoSync(); };
   // One-time sweep: clean stray punctuation off saved headwords, folding any
   // collision into the entry that already owns the cleaned term.
   function getWords() {
@@ -763,22 +764,40 @@
   }
 
   // ---- GitHub Gist cloud sync: pull → merge (newer-wins) → push ----------
-  async function cloudSync(btn) {
+  // --- auto-sync scheduling: pull on open/focus, debounced push on any change ---
+  let _syncing = false, _autoSyncTimer = null;
+  const syncReady = () => { const s = getSettings(); return !!(s.gistToken || "").trim() && !!(s.gistId || "").trim(); };
+  function scheduleAutoSync() {
+    if (!syncReady()) return;
+    clearTimeout(_autoSyncTimer);
+    _autoSyncTimer = setTimeout(() => syncNow({ silent: true }), 2500);
+  }
+
+  // core: pull remote gist → merge (newer-wins) → push back. opts.silent = no toast/redraw noise.
+  async function syncNow(opts) {
+    opts = opts || {};
+    if (_syncing) return;
     const s = getSettings();
     const t = (s.gistToken || "").trim();
-    if (!t) { toast("先填 GitHub token(只勾 gist 权限)"); return; }
+    if (!t) { if (!opts.silent) toast("先填 GitHub token(只勾 gist 权限)"); return; }
+    _syncing = true;
+    const btn = opts.btn, label = btn ? btn.textContent : "";
     const FILE = "lexis.json";
     const hdr = { Authorization: "Bearer " + t, Accept: "application/vnd.github+json" };
     const key = (x) => String(x || "").toLowerCase().trim();
-    const label = btn ? btn.textContent : "";
+    let changed = false;
     const mergeRemote = (remoteWords) => {
-      const byKey = new Map(getWords().map((w) => [key(w.word), w]));
+      const cur = getWords();
+      const byKey = new Map(cur.map((w) => [key(w.word), w]));
+      const before = cur.length;
       for (const w of remoteWords || []) {
         if (!w || !w.word) continue;
         const k = key(w.word), old = byKey.get(k);
-        if (!old || (w.updatedAt || 0) >= (old.updatedAt || 0)) byKey.set(k, w);
+        if (!old || (w.updatedAt || 0) > (old.updatedAt || 0)) { byKey.set(k, w); changed = true; }
       }
-      setWords(Array.from(byKey.values()));
+      const merged = Array.from(byKey.values());
+      if (merged.length !== before) changed = true;
+      _suppressAutoSync = true; setWords(merged); _suppressAutoSync = false;
     };
     try {
       if (btn) btn.textContent = "拉取中…";
@@ -798,11 +817,17 @@
         : await fetch("https://api.github.com/gists", { method: "POST", headers: hdr, body });
       if (!resp.ok) throw new Error("HTTP " + resp.status);
       const g = await resp.json();
-      s.gistId = g.id; setSettings(s); refreshBadge();
-      toast(`已同步 ✓ 共 ${getWords().length} 词`);
-      go("me");
-    } catch (err) { toast("同步失败:" + (err.message || err)); if (btn) btn.textContent = label || "☁️ 同步"; }
+      if (g.id && g.id !== s.gistId) { s.gistId = g.id; setSettings(s); }
+      refreshBadge();
+      if (!opts.silent) { toast(`已同步 ✓ 共 ${getWords().length} 词`); go("me"); }
+      else if (changed && (current === "notebook" || current === "review" || current === "me")) go(current); // reflect pulled words
+    } catch (err) {
+      if (!opts.silent) toast("同步失败:" + (err.message || err));
+      if (btn) btn.textContent = label || "☁️ 同步";
+    } finally { _syncing = false; }
   }
+  // button handler (manual sync from Settings)
+  function cloudSync(btn) { return syncNow({ btn }); }
 
   function exportData() {
     const blob = new Blob([JSON.stringify({ words: getWords(), settings: getSettings(), assess: getAssess() }, null, 2)], { type: "application/json" });
@@ -940,4 +965,10 @@
     const q = (qs.get("q") || "").trim();
     if (!add && q) { go("lookup"); doLookup(q); }
   } catch (e) {}
+
+  // auto-sync: pull the shared gist on open, and again whenever the app regains focus
+  // (fixes the iOS split-storage gap — every surface converges through the gist)
+  if (syncReady()) syncNow({ silent: true });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) syncNow({ silent: true }); });
+  window.addEventListener("focus", () => syncNow({ silent: true }));
 })();
