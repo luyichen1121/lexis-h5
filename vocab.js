@@ -972,7 +972,11 @@ var LEXIS_BAND_SEQ = ["common", "mid", "low", "rare", "beyond"];
 var LEXIS_BAND_LABEL = { common: "常用", mid: "中频", low: "低频", rare: "生僻", beyond: "超纲(词库外)" };
 var LEXIS_ASSESS_CORE = 2500; // basics assumed held before the pool starts
 
-// word → frequency band, or null for the basics stoplist (not worth counting).
+// word → frequency band, or null for the basics stoplist / pool noise (not
+// worth counting). Names and web junk are already stripped from LEXIS_FREQ, so
+// without the lexisIsNoiseWord guard a passage's "Montgomery" would fall
+// through to 超纲 and be offered as a tappable rare word — inflating the
+// unknown count in the band that carries the most weight.
 var _lexisBandMap = null;
 function lexisWordBand(word) {
   if (!_lexisBandMap) {
@@ -985,6 +989,7 @@ function lexisWordBand(word) {
   var w = String(word || "").toLowerCase().trim();
   if (w.length < 3) return null;
   if (LEXIS_COMMON.has(w)) return null;
+  if (lexisIsNoiseWord(w)) return null;
   var b = _lexisBandMap.get(w);
   if (b) return b;
   // Inflected forms ("steered", "widen", "replenishing") are not in the pool, and

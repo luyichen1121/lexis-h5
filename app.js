@@ -10,8 +10,11 @@
   const DAY = 86400000;
   const now = () => Date.now();
   const norm = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ").replace(/^[^\w']+|[^\w']+$/g, "");
-  // Pure person/company/place names filtered out of LEXIS_FREQ recommendations
-  // and the notebook (mirrors the same list in the Chrome extension's app.js).
+  // Names / places / brands / web junk that must never be offered as vocabulary.
+  // The list itself lives in vocab.js (LEXIS_PROPER_NOUNS + LEXIS_JUNK_WORDS, both
+  // shared with the extension); this is only the accessor. PROPER_NOUNS below is
+  // the pre-v1.52 fallback, kept so a stale cached vocab.js can't unfilter Discover.
+  const isNoise = (t) => (window.lexisIsNoiseWord ? window.lexisIsNoiseWord(t) : PROPER_NOUNS.has(t));
   const PROPER_NOUNS = new Set("aaron adams alexander alice allen amanda andrea andrew angela ann anna anthony arthur ashley austin bailey barbara benjamin bennett betty beverly brandon brian bryant campbell carl carter catherine charles charlotte christina christine christopher clark coleman collins cruz daniel david davis deborah dennis diana diane donald donna douglas edward edwards elizabeth emily emma eric evans garcia gary george gerald gregory harold harris hayes henderson henry howard hughes jackson jacob james janet jason jeffrey jennifer jeremy jerry jesse jessica joan john johnson jonathan jones jose joseph joshua joyce judy julia julie justin karen keith kelly kenneth kevin kyle larry laura lauren lawrence lee lewis linda lisa madison margaret maria marie marilyn martha martin mary matthew melissa michael michelle mitchell moore morris murphy myers nancy nathan nelson nicholas nicole pamela parker patricia patrick paul perry peter peterson phillips powell rachel raymond rebecca richard richardson robert roberts robinson roger rogers ronald ross russell ryan samuel sandra sara sarah scott sean sharon stephanie stephen steven stewart susan thomas thompson timothy tyler victoria walter washington watson william williams wilson adidas adobe amazon bmw canon cisco dell disney ebay epson google hitachi honda ibm intel kodak mastercard mcdonald microsoft mitsubishi morgan nike nikon nokia panasonic paypal philip philips samsung siemens sony tiffany toyota verizon wordpress yahoo alabama alaska albuquerque america arizona arlington atlanta australia austria baltimore bangladesh beijing belgium berlin birmingham boston brazil california canada carolina chicago china cincinnati cleveland colorado connecticut dakota dallas delaware denmark denver detroit dublin edinburgh egypt england finland florida france georgia germany glasgow greece hampshire hawaii houston idaho illinois india indiana indonesia iowa ireland italy japan kansas kentucky kenya korea liverpool london louisiana madrid maine malaysia manchester maryland massachusetts melbourne memphis mesa mexico miami michigan milwaukee minneapolis minnesota mississippi missouri montana montreal morocco moscow nashville nebraska nevada nigeria norway oakland ohio oklahoma omaha oregon orlando ottawa pakistan paris pennsylvania philadelphia philippines phoenix pittsburgh poland portland portugal rome russia sacramento scotland seattle shanghai singapore spain sweden switzerland sydney tampa tennessee texas thailand tokyo toronto tucson tulsa utah vancouver vegas vermont vietnam virginia wales wichita wisconsin wyoming york".split(" "));
 
   // ---- storage ----------------------------------------------------------
@@ -642,7 +645,7 @@
   // sentences so nothing you captured is lost.
   function tidyNotebook() {
     const words = getWords();
-    const noise = (t) => (window.lexisIsNoiseWord ? window.lexisIsNoiseWord(t) : PROPER_NOUNS.has(t));
+    const noise = isNoise;
     const kept = [], drop = [];
     words.forEach((w) => (noise(norm(w.word)) ? drop : kept).push(w));
     // fold plural / inflected duplicates onto the base form we already have
@@ -797,7 +800,7 @@
   doLookup._seq = 0;
 
   // ---- NOTEBOOK ----
-  let nbFilter = "all", nbScene = null, nbSort = "new", nbQuery = "", nbKind = "all";
+  let nbFilter = "all", nbScene = null, nbSort = "new", nbQuery = "", nbKind = "all", nbCtrlsOpen = false;
   const NB_KINDS = [["all", "全部"], ["word", "单词"], ["phrase", "词组"], ["idiom", "习语"]];
   // 单词 / 词组 / 习语 — a saved entry is an idiom when the curated idiom sets know
   // it (or it is a figurative multi-word expression), a 词组 when it is any other
@@ -858,14 +861,25 @@
         <input id="nbq" placeholder="搜索生词本,或输入新词直接查…" value="${esc(nbQuery)}" autocomplete="off" autocapitalize="off" spellcheck="false">
         <button class="btn primary" type="submit">查</button>
       </form>
-      <div class="sortbar" id="nbsort">排序:${NB_SORTS.map(([k, cn]) =>
-        `<button class="catf${nbSort === k ? " on" : ""}" data-s="${k}">${cn}</button>`).join("")}</div>
-      <p class="muted" style="font-size:12px;margin:0 0 10px">词后的标签是<b>词频</b>:极高频 / 高频 / 常用 / 中频 / 低频 / 生僻——越靠前越值得先掌握。</p>
-      <div id="nbcats"></div>
+      <div class="sortbar" id="nbsort">
+        <button class="catf ctrl-toggle" id="nbMore">筛选 · 排序 ▾</button>
+        <span class="ctrl-wrap">排序:${NB_SORTS.map(([k, cn]) =>
+          `<button class="catf${nbSort === k ? " on" : ""}" data-s="${k}">${cn}</button>`).join("")}
+          <span class="muted" style="font-size:12px;flex-basis:100%">词后的标签是<b>词频</b>:极高频 / 高频 / 常用 / 中频 / 低频 / 生僻——越靠前越值得先掌握。</span>
+        </span>
+      </div>
+      <div id="nbcats" class="ctrl-wrap"></div>
       <div id="nblist"></div>`;
     view.querySelectorAll("#nbkinds button").forEach((b) => b.addEventListener("click", () => { nbKind = b.dataset.k; nbScene = null; renderNotebook(); }));
     view.querySelectorAll("#nbtabs button").forEach((b) => b.addEventListener("click", () => { nbFilter = b.dataset.f; renderNotebook(); }));
-    view.querySelectorAll("#nbsort button").forEach((b) => b.addEventListener("click", () => { nbSort = b.dataset.s; renderNotebook(); }));
+    // one toggle instead of three permanent rows of controls above the list
+    $("#nbMore").addEventListener("click", () => {
+      nbCtrlsOpen = !nbCtrlsOpen;
+      view.querySelectorAll(".ctrl-wrap").forEach((n) => n.classList.toggle("open", nbCtrlsOpen));
+      $("#nbMore").textContent = nbCtrlsOpen ? "收起 ▴" : "筛选 · 排序 ▾";
+    });
+    if (nbCtrlsOpen) { view.querySelectorAll(".ctrl-wrap").forEach((n) => n.classList.add("open")); $("#nbMore").textContent = "收起 ▴"; }
+    view.querySelectorAll("#nbsort [data-s]").forEach((b) => b.addEventListener("click", () => { nbSort = b.dataset.s; renderNotebook(); }));
     $("#nbsearch").addEventListener("submit", (e) => {
       e.preventDefault();
       const t = nbQuery.trim();
@@ -893,6 +907,7 @@
         cats.innerHTML = list.length ? catBarH5(list.map((w) => w.word), "wordNb", nbScene, "data-nbscene") : "";
         cats.querySelectorAll("[data-nbscene]").forEach((b) => b.addEventListener("click", () => {
           const key = b.dataset.nbscene;
+          if (key === "__more__") { b.parentElement.classList.add("open"); b.remove(); return; }
           nbScene = (key === "__all__" || nbScene === key) ? null : key;
           drawNbList();
         }));
@@ -1222,9 +1237,21 @@
     const chip = (key, cn, n, on, muted) =>
       `<button class="catf${on ? " on" : ""}${muted ? " muted" : ""}" ${attr}="${esc(key)}">${esc(cn)} <b>${n}</b></button>`;
     const chips = [chip("__all__", "全部", items.length, !active, false)];
-    [...counts.entries()].sort((a, b) => b[1].n - a[1].n)
-      .forEach(([key, v]) => chips.push(chip(key, v.cn, v.n, active === key, key === "_other")));
-    return `<div class="catbar">${chips.join("")}</div>`;
+    // 20 scenes is 3 rows of chips on a phone. Show the 6 biggest (plus whichever
+    // one is active) and hide the tail behind 更多 — the long tail is rarely what
+    // you want and it pushed the actual list below the fold.
+    const sorted = [...counts.entries()].sort((a, b) => b[1].n - a[1].n);
+    const HEAD = 6;
+    sorted.forEach(([key, v], i) => {
+      if (i < HEAD || active === key) chips.push(chip(key, v.cn, v.n, active === key, key === "_other"));
+    });
+    const restN = sorted.length - Math.min(HEAD, sorted.length);
+    const rest = restN > 0
+      ? `<button class="catf more" ${attr}="__more__">更多 ${restN} 类 ▾</button>` +
+        `<span class="catmore">${sorted.slice(HEAD).filter(([k]) => k !== active)
+          .map(([key, v]) => chip(key, v.cn, v.n, false, key === "_other")).join("")}</span>`
+      : "";
+    return `<div class="catbar">${chips.join("")}${rest}</div>`;
   }
   function knownSet() {
     const s = new Set(getAssess().known.map(norm));
@@ -1260,7 +1287,7 @@
     const known = knownSet();
     const term = (x) => (typeof x === "string" ? x : x.term || x.phrase || x.word || (Array.isArray(x) ? x[0] : ""));
     if (kind === "words") {
-      let pool = (window.LEXIS_FREQ || []).filter((x) => term(x) && !known.has(norm(term(x))) && !PROPER_NOUNS.has(norm(term(x))));
+      let pool = (window.LEXIS_FREQ || []).filter((x) => term(x) && !known.has(norm(term(x))) && !isNoise(norm(term(x))));
       const lvl = levelWindow(pool.length);
       // Start at your level instead of at the top of the pool — otherwise page 1
       // is always the most common words, which is why Discover felt too easy.
@@ -1328,6 +1355,7 @@
       cats.innerHTML = catBarH5(fullPool, dTab, dScene[dTab], "data-dscene");
       cats.querySelectorAll("[data-dscene]").forEach((b) => b.addEventListener("click", () => {
         const key = b.dataset.dscene;
+        if (key === "__more__") { b.parentElement.classList.add("open"); b.remove(); return; }
         dScene[dTab] = (key === "__all__" || dScene[dTab] === key) ? null : key;
         dCursor[dTab] = 0; drawStudy();
       }));
@@ -1428,7 +1456,7 @@
         <div class="row"><button class="btn" id="exp">导出 JSON</button><button class="btn" id="imp">导入</button><button class="btn" id="clr" style="color:#c05a5a">清空</button></div>
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.53.0 · 数据仅存本机浏览器</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.53.1 · 数据仅存本机浏览器</p>`;
 
     $("#setCn").addEventListener("change", (e) => { s.chinese = e.target.checked; setSettings(s); });
     $("#setEx").addEventListener("change", (e) => { s.showExamples = e.target.checked; setSettings(s); });
