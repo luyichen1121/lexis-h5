@@ -221,3 +221,33 @@ select{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size
 .ctrl-wrap{display:none}
 .ctrl-wrap.open{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
 .catf.ctrl-toggle{background:transparent;border:1px dashed var(--line)}
+
+/* 短语动词 sense breakdown (PHaVE) */
+.pv-sense{flex-basis:100%;margin-top:6px;font-size:13px}
+.pv-pct{display:inline-block;min-width:44px;font-size:11px;color:var(--sage);font-weight:700}
+.pv-sense b{font-weight:600}
+.pv-sense .study-ex{margin-top:3px;margin-left:44px}
+
+/* productive (cloze) review */
+.cloze{font-family:Georgia,serif;font-size:20px;line-height:1.7;text-align:left}
+.cloze-in{width:100%;margin-top:14px;font-size:17px;padding:11px 13px;border:1px solid var(--line);
+  border-radius:12px;background:var(--paper2);color:var(--ink);font-family:Georgia,serif;text-align:center}
+.cloze-in:focus{outline:none;border-color:var(--clay);background:var(--card)}
+.verdict{margin-top:12px;font-size:14px}
+.verdict.ok{color:var(--sage)} .verdict.no{color:#c05a5a}
+.rev-two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.rev-two .linklike{grid-column:1 / -1;justify-self:center;margin-top:4px;font-size:12px}
+.rev-two .btn{padding:18px 8px;font-size:16px}
+.big-no{color:#c05a5a} .big-yes{background:var(--sage);border-color:var(--sage);color:#fff}
+.big-yes .d{color:rgba(255,255,255,.85)}
+
+/* toast with an Undo action */
+.toast.actionable{pointer-events:auto}
+.toast-undo{border:0;background:none;color:#e8b58c;font:inherit;font-weight:600;
+  cursor:pointer;margin-left:10px;text-decoration:underline;text-underline-offset:3px}
+/* paste = an icon in the search row, not a full-width button competing with it */
+.search .btn.icon{padding:11px 12px;font-size:16px;line-height:1}
+
+/* 我的: settings stay up top, data/sync/maintenance fold away */
+.adv{display:none}
+.adv.open{display:block}

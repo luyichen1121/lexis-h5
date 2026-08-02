@@ -81,10 +81,21 @@
     if (!keepStamp && !_suppressAutoSync) scheduleAutoSync();
   };
 
-  function toast(msg) {
+  // A toast that can carry an Undo. Every destructive action goes through this
+  // instead of a confirm() dialog — confirming is friction on the 99% of taps that
+  // were intentional, and gives you nothing on the 1% that weren't.
+  function toast(msg, undo) {
     let t = $(".toast"); if (!t) { t = el(`<div class="toast"></div>`); document.body.appendChild(t); }
-    t.innerHTML = msg; t.classList.add("show");
-    clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 1800);
+    t.innerHTML = msg + (undo ? ` <button class="toast-undo">撤销</button>` : "");
+    t.classList.toggle("actionable", !!undo);
+    t.classList.add("show");
+    clearTimeout(toast._t);
+    const hide = () => t.classList.remove("show");
+    toast._t = setTimeout(hide, undo ? 6000 : 1800);
+    if (undo) {
+      const b = t.querySelector(".toast-undo");
+      b.addEventListener("click", () => { clearTimeout(toast._t); hide(); undo(); });
+    }
   }
 
   // ---- audio ----
@@ -722,9 +733,9 @@
     view.innerHTML = `
       <form class="search" id="sform">
         <input id="q" placeholder="输入单词或短语…" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="btn icon" type="button" id="pasteBtn" title="从剪贴板粘贴查词">📋</button>
         <button class="btn primary" type="submit">查</button>
       </form>
-      <div class="row" style="margin-top:8px"><button class="btn sage" id="pasteBtn" style="width:100%">📋 粘贴保存(从剪贴板)</button></div>
       <div id="result"></div>`;
     $("#sform").addEventListener("submit", (e) => { e.preventDefault(); doLookup($("#q").value); });
     $("#pasteBtn").addEventListener("click", pasteAndSave);
@@ -1092,16 +1103,28 @@
       patchSrs((s) => isMastered
         ? { due: now(), interval: 0, ease: s.ease || 2.5, reps: 0, lapses: s.lapses || 0, last: now() }
         : { due: now() + 30 * DAY, interval: 30, ease: s.ease || 2.5, reps: Math.max(s.reps || 0, 3), lapses: s.lapses || 0, last: now() });
-      toast(isMastered ? "已取消" : "已标为已掌握"); openDetail(id);
+      const before = JSON.parse(JSON.stringify((getWords().find((x) => x.id === id) || {}).srs || {}));
+      toast(isMastered ? "已取消已掌握" : "已标为已掌握", () => { patchSrs(() => before); openDetail(id); });
+      openDetail(id);
     });
     $("#resetProg").addEventListener("click", () => {
+      const prevSrs = JSON.parse(JSON.stringify(w.srs || {}));
       patchSrs(() => ({ due: now(), interval: 0, ease: 2.5, reps: 0, lapses: 0, last: 0 }));
-      toast("进度已重置"); openDetail(id);
+      toast("进度已重置", () => { patchSrs(() => prevSrs); openDetail(id); });
+      openDetail(id);
     });
     $("#sup").addEventListener("click", () => supplement(id, true));
     if (auto) supplement(id, false);
     $("#back").addEventListener("click", () => go(current === "lookup" ? "lookup" : "notebook"));
-    $("#del").addEventListener("click", () => { if (confirm("删除 “" + w.word + "”？")) { removeWord(id); toast("已删除"); go("notebook"); } });
+    $("#del").addEventListener("click", () => {
+      const snapshot = getWords().find((x) => x.id === id);
+      removeWord(id); go("notebook"); refreshBadge();
+      toast("已删除 <b>" + esc(w.word) + "</b>", () => {
+        const ws = getWords();
+        if (!ws.some((x) => x.id === id)) { ws.unshift(snapshot); setWords(ws); }
+        toast("已恢复"); refreshBadge(); openDetail(id);
+      });
+    });
     $("#edit").addEventListener("click", async () => {
       const next = cleanTerm(prompt("修改词条：", w.word) || "");
       if (!next || next === w.word) return;
@@ -1128,46 +1151,146 @@
   }
 
   // ---- REVIEW ----
+  // Two modes. 认释义 (receptive) is the classic card. 会说 (productive) blanks the
+  // target out of a real sentence and asks you to supply it — a constructed-response
+  // task, which is how the literature actually measures productive knowledge, and
+  // the thing that closes the "I can read it but can't say it" gap. Productive is
+  // only offered when we have a usable sentence to blank.
   let session = null;
-  function renderReview() {
+  let revScope = "all";        // all | phrase — 短语/习语 have their own queue
+  let revFine = false;         // show the 4-level grade bar instead of 不会/会了
+  const REV_SCOPES = [["all", "全部"], ["phrase", "只练短语 / 习语"]];
+
+  const isChunk = (w) => /\s/.test((w.word || "").trim());
+  function scopedDue() {
     const due = dueWords();
-    if (!due.length) {
-      view.innerHTML = `<div class="empty"><div class="big">✅</div>没有待复习的词。<br><span class="muted">保存新词后会按间隔重复排期。</span></div>`;
-      session = null; return;
+    return revScope === "phrase" ? due.filter(isChunk) : due;
+  }
+  // pick a sentence we can blank the target out of: your own example first, then a
+  // fetched one, then the original sentence you captured it in.
+  function clozeFor(w) {
+    const d = w.data || {};
+    const cands = [].concat(d.userExamples || [], d.examples || [],
+      (w.context || "").trim() ? [{ text: w.context, translation: "" }] : []);
+    const head = (w.word || "").trim();
+    if (!head) return null;
+    const first = head.split(/\s*\/\s*/)[0];
+    let re;
+    try { re = new RegExp("\\b" + first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+") + "\\w*", "i"); }
+    catch (e) { return null; }
+    for (const c of cands) {
+      const t = (c.text || "").trim();
+      if (!t || !re.test(t)) continue;
+      return { blanked: t.replace(re, "____"), answer: t.match(re)[0], full: t, cn: c.translation || "" };
     }
-    if (!session || !session.queue.length) session = { queue: due.slice(), total: due.length, done: 0, showBack: false };
+    return null;
+  }
+  const normAns = (s2) => String(s2 || "").toLowerCase().replace(/[^a-z' ]/g, "").replace(/\s+/g, " ").trim();
+  // Accept inflected forms — typing "going on" for "go on" is knowing the chunk,
+  // not getting it wrong. Compares word-by-word through the shared de-inflector.
+  function answerMatches(typed, expected, headword) {
+    const t = normAns(typed);
+    if (!t) return false;
+    const stems = (x) => {
+      const c = window.lexisStemCandidates ? window.lexisStemCandidates(x) : [];
+      return new Set([x].concat(c));
+    };
+    for (const target of [expected, headword]) {
+      const a = normAns(target).split(" "), b = t.split(" ");
+      if (!a.length || a.length !== b.length) continue;
+      if (a.every((wd, i) => wd === b[i] || stems(wd).has(b[i]) || stems(b[i]).has(wd))) return true;
+    }
+    return false;
+  }
+
+  function renderReview() {
+    const due = scopedDue();
+    const scopeBar = `<div class="subtabs" id="revscope">${REV_SCOPES.map(([k, cn]) =>
+      `<button data-rs="${k}" class="${revScope === k ? "on" : ""}">${cn}</button>`).join("")}</div>`;
+    if (!due.length) {
+      view.innerHTML = scopeBar + `<div class="empty"><div class="big">✅</div>${
+        revScope === "phrase" ? "没有到期的短语/习语。" : "没有待复习的词。"}<br><span class="muted">保存新词后会按间隔重复排期。</span></div>`;
+      wireScope(); session = null; return;
+    }
+    if (!session || !session.queue.length || session.scope !== revScope)
+      session = { queue: due.slice(), total: due.length, done: 0, showBack: false, scope: revScope, tried: false };
     drawCard();
+  }
+  function wireScope() {
+    view.querySelectorAll("#revscope button").forEach((b) => b.addEventListener("click", () => {
+      revScope = b.dataset.rs; session = null; renderReview();
+    }));
   }
   function drawCard() {
     const w = session.queue[0];
-    if (!w) { view.innerHTML = `<div class="empty"><div class="big">🎉</div>本轮完成！复习了 ${session.total} 个词。</div>`; session = null; refreshBadge(); return; }
+    if (!w) {
+      view.innerHTML = `<div class="empty"><div class="big">🎉</div>本轮完成！复习了 ${session.total} 个。</div>`;
+      session = null; refreshBadge(); return;
+    }
     const pct = Math.round((session.done / session.total) * 100);
     const d = w.data || {};
     const back = session.showBack;
-    view.innerHTML = `
+    const cz = clozeFor(w);
+    const scopeBar = `<div class="subtabs" id="revscope">${REV_SCOPES.map(([k, cn]) =>
+      `<button data-rs="${k}" class="${revScope === k ? "on" : ""}">${cn}</button>`).join("")}</div>`;
+    // productive prompt: the sentence with the target removed + its Chinese
+    const front = cz
+      ? `<div class="cloze">${esc(cz.blanked)}</div>
+         ${cz.cn ? `<div class="muted" style="font-size:13px;margin-top:8px">${esc(cz.cn)}</div>` : ""}
+         ${d.cn ? `<div class="cn-gloss" style="font-size:14px">${esc(d.cn)}</div>` : ""}
+         <input id="czin" class="cloze-in" placeholder="填进去试试(可跳过)" autocomplete="off" autocapitalize="off" spellcheck="false">`
+      : `<div class="hw serif">${esc(w.word)}</div>
+         ${d.phonetic ? `<div class="phon">${esc(d.phonetic)}</div>` : ""}
+         <div class="muted" style="margin-top:14px">想想它的意思</div>`;
+    const answer = `<hr class="hr">
+      <div class="hw serif">${esc(w.word)}</div>
+      ${d.phonetic ? `<div class="phon">${esc(d.phonetic)}</div>` : ""}
+      <button class="speak" id="rspk" style="font-size:26px">🔊</button>
+      ${d.cn ? `<div class="cn-gloss">${esc(d.cn)}</div>` : ""}
+      ${(d.meanings || []).slice(0, 2).map((m) => `<div class="mean" style="text-align:left">${m.pos ? `<span class="pos">${esc(m.pos)}</span> ` : ""}${esc(m.definition)}${m.cn ? `<div class="cn">${esc(m.cn)}</div>` : ""}</div>`).join("")}
+      ${cz ? `<div class="ex" style="text-align:left">${esc(cz.full)}${cz.cn ? `<div class="tr">${esc(cz.cn)}</div>` : ""}</div>`
+           : (d.examples || []).slice(0, 1).map((e) => `<div class="ex" style="text-align:left">${esc(e.text)}${e.translation ? `<div class="tr">${esc(e.translation)}</div>` : ""}</div>`).join("")}`;
+    view.innerHTML = scopeBar + `
       <div class="progress"><i style="width:${pct}%"></i></div>
       <div class="card rev-card">
-        <div class="hw serif">${esc(w.word)}</div>
-        ${w.data && w.data.phonetic ? `<div class="phon">${esc(w.data.phonetic)}</div>` : ""}
-        <button class="speak" id="rspk" style="font-size:26px">🔊</button>
-        ${back ? `<hr class="hr">
-          ${d.cn ? `<div class="cn-gloss">${esc(d.cn)}</div>` : ""}
-          ${(d.meanings || []).slice(0, 2).map((m) => `<div class="mean" style="text-align:left">${m.pos ? `<span class="pos">${esc(m.pos)}</span> ` : ""}${esc(m.definition)}${m.cn ? `<div class="cn">${esc(m.cn)}</div>` : ""}</div>`).join("")}
-          ${(d.examples || []).slice(0, 1).map((e) => `<div class="ex" style="text-align:left">${esc(e.text)}${e.translation ? `<div class="tr">${esc(e.translation)}</div>` : ""}</div>`).join("")}`
-          : `<div class="muted" style="margin-top:14px">想想它的意思</div>`}
+        ${back ? (cz ? `<div class="cloze">${esc(cz.blanked)}</div>` : "") + answer : front}
+        ${back && session.verdict ? `<div class="verdict ${session.verdict}">${session.verdict === "ok" ? "✓ 答对了" : "✗ 再看一遍"}</div>` : ""}
       </div>
-      ${back ? gradeBar(w) : `<button class="btn primary" id="flip" style="width:100%;padding:14px">显示释义</button>`}`;
-    $("#rspk").addEventListener("click", () => speak(w.word, w.data && w.data.audioUs));
-    if (!back) $("#flip").addEventListener("click", () => { session.showBack = true; drawCard(); });
-    else view.querySelectorAll("[data-grade]").forEach((b) => b.addEventListener("click", () => grade(w, b.dataset.grade)));
+      ${back ? gradeBar(w) : `<button class="btn primary" id="flip" style="width:100%;padding:14px">${cz ? "对答案" : "显示释义"}</button>`}`;
+    wireScope();
+    const spk = $("#rspk");
+    if (spk) spk.addEventListener("click", () => speak(w.word, d.audioUs));
+    if (!back) {
+      const inp = $("#czin");
+      const reveal = () => {
+        if (inp && cz) {
+          const v = normAns(inp.value);
+          if (v) session.verdict = answerMatches(inp.value, cz.answer, w.word) ? "ok" : "no";
+        }
+        session.showBack = true; drawCard();
+      };
+      $("#flip").addEventListener("click", reveal);
+      if (inp) { inp.focus(); inp.addEventListener("keydown", (e) => { if (e.key === "Enter") reveal(); }); }
+    } else {
+      view.querySelectorAll("[data-grade]").forEach((b) => b.addEventListener("click", () => grade(w, b.dataset.grade)));
+      const f = $("#revFine");
+      if (f) f.addEventListener("click", () => { revFine = !revFine; drawCard(); });
+    }
   }
+  // Two big targets by default (thumb-friendly); the 4-level SRS bar is one tap away.
   function gradeBar(w) {
+    if (!revFine) return `<div class="rev-two">
+      <button class="btn big-no" data-grade="again">不会<span class="d">10 分钟后再来</span></button>
+      <button class="btn big-yes" data-grade="good">会了<span class="d">${intervalLabel(schedule(w.srs, "good").interval)}</span></button>
+      <button class="linklike" id="revFine">更细的评分 ▾</button>
+    </div>`;
     const g = (k, label) => { const days = schedule(w.srs, k).interval || 10 / 1440; return `<button class="btn" data-grade="${k}">${label}<span class="d">${intervalLabel(days)}</span></button>`; };
     return `<div class="rev-actions">
-      <button class="btn" data-grade="again" style="color:#c05a5a">重来<span class="d">10 分钟</span></button>
-      ${g("hard", "困难")}${g("good", "记得")}
-      <button class="btn sage" data-grade="easy">简单<span class="d">${intervalLabel(schedule(w.srs, "easy").interval)}</span></button>
-    </div>`;
+        <button class="btn" data-grade="again" style="color:#c05a5a">重来<span class="d">10 分钟</span></button>
+        ${g("hard", "困难")}${g("good", "记得")}
+        <button class="btn sage" data-grade="easy">简单<span class="d">${intervalLabel(schedule(w.srs, "easy").interval)}</span></button>
+      </div>
+      <div class="row" style="justify-content:center"><button class="linklike" id="revFine">收起 ▴</button></div>`;
   }
   function grade(w, g) {
     const words = getWords();
@@ -1175,13 +1298,13 @@
     if (rec) { rec.srs = schedule(rec.srs, g); rec.updatedAt = now(); setWords(words); }
     session.queue.shift();
     if (g === "again" && rec) session.queue.push(rec); // re-show at end
-    session.done += 1; session.showBack = false;
+    session.done += 1; session.showBack = false; session.verdict = null;
     drawCard();
   }
 
   // ---- DISCOVER (offline study lists from vocab.js) ----
-  let dTab = "words", dCursor = { words: 0, phrases: 0, idioms: 0 };
-  let dScene = { words: null, phrases: null, idioms: null }; // active usage-scene filter per tab
+  let dTab = "words", dCursor = { words: 0, phrases: 0, pv: 0, idioms: 0 };
+  let dScene = { words: null, phrases: null, pv: null, idioms: null }; // active filter per tab
   const PAGE = 12;
   // usage-scene of a term, memoized. kind = "words"|"phrases"|"idioms" (Discover)
   // or "wordNb" for a notebook entry (guesses word vs phrase/idiom by spaces).
@@ -1194,6 +1317,7 @@
       // 短语 are classified by their SHAPE (语法结构/短语动词/介词短语/连接·语篇/固定表达),
       // not by topic — "have to" and "such as" aren't about a subject, and the
       // shape is what tells you how to produce them.
+      if (kind === "pv") { _sceneCacheH5.set(ck, null); return null; }   // ranked by frequency only
       if (kind === "phrases" && window.lexisPhraseType) {
         const pt = window.lexisPhraseType(term);
         out = pt ? { key: pt, cn: (window.LEXIS_PTYPE_CN || {})[pt] || pt } : null;
@@ -1314,11 +1438,13 @@
         seen.add(k); return true;
       });
     }
+    if (kind === "pv") return (window.LEXIS_PHAVE_LIST || []).map((x) => x.term).filter((t) => !known.has(norm(t)));
     if (kind === "idioms") return Object.keys(window.LEXIS_IDIOM_SCENE || {}).filter((p) => !known.has(norm(p)));
     return [];
   }
   // one honest line telling you WHY this batch is what it is
   function discoverHint() {
+    if (dTab === "pv") return "<b>最高频的 149 个短语动词</b>(PHaVE List)。词都简单、意思不简单,而且一个动词常有好几个义项——这里<b>只列真正常用的义项</b>,括号里的百分比是它在真实语料中占该动词全部用法的比例。";
     if (dTab === "phrases") return "按语料词频排序的 <b>498 条高频固定表达</b>(PHRASE List)——「单词都认识却说不出来」的就是这些。分类按<b>结构</b>而不是话题,每条给一句真实例句。";
     if (dTab === "idioms") return "地道习语,按常用度排序,分类是使用场景。先看懂例句里的用法,再点「学习」加入生词本。";
     const w = weakBandOrder();
@@ -1336,7 +1462,8 @@
     view.innerHTML = `
       <div class="subtabs" id="dtabs">
         <button data-d="words" class="${dTab === "words" ? "on" : ""}">单词</button>
-        <button data-d="phrases" class="${dTab === "phrases" ? "on" : ""}">短语搭配</button>
+        <button data-d="pv" class="${dTab === "pv" ? "on" : ""}">短语动词</button>
+        <button data-d="phrases" class="${dTab === "phrases" ? "on" : ""}">固定表达</button>
         <button data-d="idioms" class="${dTab === "idioms" ? "on" : ""}">习语</button>
       </div>
       <p class="muted" style="font-size:13px;margin-top:0">${discoverHint()}</p>
@@ -1375,7 +1502,10 @@
       const scene = sc ? sc.cn : "";
       // an example sentence is the single most useful thing on a chunk card —
       // you learn a phrase from seeing it used, not from the phrase alone
-      const ex = (window.LEXIS_PHRASE_EXAMPLE && window.LEXIS_PHRASE_EXAMPLE.get(norm(term))) || "";
+      // 短语动词 get their sense breakdown (which meaning is worth learning, and
+      // what share of real uses it covers) instead of a single example
+      const pv = dTab === "pv" && window.LEXIS_PHAVE_MAP && window.LEXIS_PHAVE_MAP.get(norm(term));
+      const ex = pv ? "" : (window.LEXIS_PHRASE_EXAMPLE && window.LEXIS_PHRASE_EXAMPLE.get(norm(term))) || "";
       const hiEx = ex ? esc(ex).replace(new RegExp("(" + term.split(/\s*\/\s*/)[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+") + "\\w*)", "i"), "<mark>$1</mark>") : "";
       return `<div class="study${ex ? " has-ex" : ""}" data-term="${esc(term)}">
         <span class="term serif">${esc(term)}</span>
@@ -1384,7 +1514,8 @@
           <button class="btn" data-act="learn">学习</button>
           <button class="btn sage" data-act="master">已掌握</button>
         </span>
-        ${hiEx ? `<div class="study-ex">${hiEx}</div>` : ""}</div>`;
+        ${hiEx ? `<div class="study-ex">${hiEx}</div>` : ""}
+        ${pv ? pv.senses.map((sn) => `<div class="pv-sense"><span class="pv-pct">${sn.p}%</span><b>${esc(sn.d)}</b><div class="study-ex">${esc(sn.e)}</div></div>`).join("") : ""}</div>`;
     }).join("");
     box.querySelectorAll(".study").forEach((row) => {
       const term = row.dataset.term;
@@ -1436,6 +1567,8 @@
         <label class="set">自动增补(例句/中文/词频) <input type="checkbox" id="setAuto" ${s.autoEnrich !== false ? "checked" : ""}></label>
         <label class="set">每日新词上限 <input type="number" id="setLimit" value="${s.dailyNewLimit}" min="1" max="100" style="width:70px"></label>
       </div>
+      <div class="row" style="margin:2px 0 12px"><button class="btn" id="advToggle" style="width:100%">⚙️ 数据与同步 ▾</button></div>
+      <div id="adv" class="adv">
       <div class="card">
         <h2 class="sec">☁️ 云同步</h2>
         <p class="muted" style="font-size:12px;margin:0 0 8px">和电脑 Chrome 扩展共用一个私有 GitHub Gist。点「同步」= 拉取 → 按新版优先合并 → 推回。Token 只存本机、绝不上传。<a href="https://github.com/settings/tokens/new?scopes=gist&description=Lexis%20Sync" target="_blank">生成 token</a>(只勾 gist)。</p>
@@ -1456,8 +1589,14 @@
         <div class="row"><button class="btn" id="exp">导出 JSON</button><button class="btn" id="imp">导入</button><button class="btn" id="clr" style="color:#c05a5a">清空</button></div>
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.53.1 · 数据仅存本机浏览器</p>`;
+      </div>
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.54.0 · 数据仅存本机浏览器</p>`;
 
+    // settings you actually touch stay visible; sync/data/maintenance fold away
+    $("#advToggle").addEventListener("click", () => {
+      const open = $("#adv").classList.toggle("open");
+      $("#advToggle").textContent = open ? "⚙️ 数据与同步 ▴" : "⚙️ 数据与同步 ▾";
+    });
     $("#setCn").addEventListener("change", (e) => { s.chinese = e.target.checked; setSettings(s); });
     $("#setEx").addEventListener("change", (e) => { s.showExamples = e.target.checked; setSettings(s); });
     $("#setAuto").addEventListener("change", (e) => { s.autoEnrich = e.target.checked; setSettings(s); });
@@ -1470,7 +1609,10 @@
     $("#exp").addEventListener("click", exportData);
     $("#imp").addEventListener("click", () => $("#impFile").click());
     $("#impFile").addEventListener("change", importData);
-    $("#clr").addEventListener("click", () => { if (confirm("清空所有生词与设置？此操作不可恢复。")) { localStorage.clear(); toast("已清空"); go("me"); } });
+    $("#clr").addEventListener("click", () => {
+      // the one action that stays behind a confirm — it wipes settings + token too
+      if (confirm("清空本机所有生词与设置?这一步无法撤销(云端 Gist 不受影响)。")) { localStorage.clear(); toast("已清空"); go("me"); }
+    });
     $("#fixAll").addEventListener("click", async (e) => {
       const btn = e.target;
       if (!incomplete) { toast("生词本里的内容都是完整的 ✓"); return; }
