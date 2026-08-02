@@ -200,3 +200,14 @@ select{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size
 .lvl-track > i.freq-mid{background:#d9a441} .lvl-track > i.freq-low{background:#a583c4}
 .lvl-track > i.freq-rare{background:#c05a5a} .lvl-track > i.freq-common{background:#8fb387}
 .lvl-n{flex:0 0 auto;font-size:11px;color:var(--ink2);min-width:88px;text-align:right}
+
+/* 我的例句 (user-written examples) — marked apart from the fetched ones */
+.ex.mine{border-left-color:var(--sage)}
+.linklike{border:0;background:none;padding:0;color:var(--clay);cursor:pointer;font-size:inherit;
+  font-family:inherit;text-decoration:underline;text-underline-offset:2px}
+
+/* study card with an example sentence (短语/习语 学习清单) */
+.study.has-ex{flex-wrap:wrap}
+.study-ex{flex-basis:100%;font-size:13px;color:var(--ink2);margin-top:2px;
+  border-left:2px solid var(--line);padding-left:9px;line-height:1.5}
+.study-ex mark{background:rgba(192,96,62,.13);color:var(--ink);border-radius:3px;padding:0 2px}
