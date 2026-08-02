@@ -251,3 +251,17 @@ select{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size
 /* 我的: settings stay up top, data/sync/maintenance fold away */
 .adv{display:none}
 .adv.open{display:block}
+
+/* 查词与生词本合并成一个 tab: the list hides behind a look-up result */
+body.looking .nb-only{display:none}
+.lookup-bar{margin-bottom:12px}
+
+/* 短语/习语摸底 chips */
+.chunk-chip{border:1px solid var(--line);background:var(--card);color:var(--ink);
+  border-radius:10px;padding:8px 12px;font-size:14px;font-family:Georgia,serif;cursor:pointer}
+.chunk-chip.unk{background:var(--clay);border-color:var(--clay);color:#fff}
+
+/* review home — streak + goal instead of dropping you straight into a card */
+.rev-home{text-align:center;padding:26px 18px}
+.rev-streak{font-size:14px;color:var(--clay);margin-bottom:10px}
+.rev-home .meter{max-width:280px;margin:14px auto 6px}

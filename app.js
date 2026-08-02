@@ -19,7 +19,7 @@
 
   // ---- storage ----------------------------------------------------------
   const K = { words: "lexis_words", settings: "lexis_settings", assess: "lexis_assess" };
-  const DEFAULT_SETTINGS = { chinese: true, dailyNewLimit: 15, showExamples: true, autoEnrich: true, gistToken: "", gistId: "" };
+  const DEFAULT_SETTINGS = { chinese: true, dailyNewLimit: 15, dailyGoal: 20, showExamples: true, autoEnrich: true, gistToken: "", gistId: "" };
   function load(k, fb) { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? fb : v; } catch (e) { return fb; } }
   function save(k, v) { localStorage.setItem(k, JSON.stringify(v)); }
   // Strip punctuation a selection dragged in ("word," / “word” / (word).),
@@ -442,11 +442,27 @@
     // than sentences, so top up from Tatoeba unless we already have real ones,
     // then float the sentence-like examples to the top.
     const wordy = (t) => String(t || "").trim().split(/\s+/).length >= 5;
+    const addEx = (list, from) => {
+      (list || []).forEach((m) => {
+        if (!(p.examples || []).some((e) => e.text === m.text))
+          p.examples = (p.examples || []).concat([{ text: m.text, translation: "", from: from || "" }]);
+      });
+    };
     if ((p.examples || []).filter((e) => wordy(e.text)).length < 2) {
-      const more = await withTimeout(fetchTatoeba(p.term), 8000, []);
-      p.examples = (p.examples || []).concat(
-        more.filter((m) => !(p.examples || []).some((e) => e.text === m.text))
-      );
+      addEx(await withTimeout(fetchTatoeba(p.term), 8000, []));
+    }
+    // A derived form ("perceptively") often has no corpus sentences of its own,
+    // which is why the 例句 card came up empty. Fall back to the base word — a
+    // sentence with "perceptive" still shows you how the family is used, and the
+    // card says where it came from.
+    if (!(p.examples || []).length && !p.isPhrase && window.lexisStemCandidates) {
+      for (const base of window.lexisStemCandidates(p.term)) {
+        if (base.length < 4) continue;
+        const w2 = await withTimeout(fetchWiktionary(base), 6000, null);
+        addEx((w2 && w2.examples) || [], base);
+        if (!(p.examples || []).length) addEx(await withTimeout(fetchTatoeba(base), 7000, []), base);
+        if ((p.examples || []).length) break;
+      }
     }
     p.examples = (p.examples || [])
       .map((e, i) => ({ e, i }))
@@ -521,8 +537,9 @@
       if (mine.length || exs.length || opts.pending || opts.addExample) {
         h += `<div class="card"><h2 class="sec">例句</h2>` +
           mine.map((e, i) => `<div class="ex mine">${hi(e.text)}${e.translation ? `<div class="tr">${esc(e.translation)}</div>` : ""}<div class="src">我的例句${opts.addExample ? ` · <button class="linklike" data-delex="${i}">删除</button>` : ""}</div></div>`).join("") +
-          exs.map((e) => `<div class="ex">${hi(e.text)}${e.translation ? `<div class="tr">${esc(e.translation)}</div>` : ""}</div>`).join("") +
+          exs.map((e) => `<div class="ex">${hi(e.text)}${e.translation ? `<div class="tr">${esc(e.translation)}</div>` : ""}${e.from ? `<div class="src">来自同词族 <b>${esc(e.from)}</b></div>` : ""}</div>`).join("") +
           (opts.pending ? `<div class="muted" style="font-size:12px"><span class="spin"></span> 正在增补例句与中文…</div>` : "") +
+          (!exs.length && !mine.length && !opts.pending ? `<div class="muted" style="font-size:13px">语料库里没有现成例句——自己写一句反而最记得住。</div>` : "") +
           (opts.addExample ? `<div class="row" style="margin-top:10px"><button class="btn" id="addExBtn">＋ 添加我的例句</button></div>` : "") +
           `</div>`;
       }
@@ -555,7 +572,7 @@
   }
   function wireCard(root) {
     root.querySelectorAll("[data-audio]").forEach((b) => b.addEventListener("click", () => speak(b.dataset.w, b.dataset.audio)));
-    root.querySelectorAll("[data-look]").forEach((b) => b.addEventListener("click", () => { go("lookup"); doLookup(b.dataset.look); }));
+    root.querySelectorAll("[data-look]").forEach((b) => b.addEventListener("click", () => doLookup(b.dataset.look)));
   }
   // ---- 我的例句: sentences you type in yourself ------------------------
   // Kept in `data.userExamples` and always rendered ABOVE the fetched ones. The
@@ -720,35 +737,35 @@
     $("#dueBadge").textContent = n ? n + " 个待复习" : "";
   }
 
+  // 查词 and 生词本 are one tab — the search box at the top of the notebook does
+  // both: it filters what you've saved as you type, and looks up anything you
+  // haven't. `nbView` says whether the tab is currently showing the list, a
+  // look-up result, or a saved word's detail.
+  let nbView = { mode: "list", term: "", ctx: "", id: null };
   function go(tab) {
+    if (tab === "lookup") tab = "notebook";
     current = tab;
     document.querySelectorAll(".tabbar button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
-    ({ lookup: renderLookup, notebook: renderNotebook, review: renderReview, discover: renderDiscover, me: renderMe }[tab])();
+    ({ notebook: renderNotebook, review: renderReview, discover: renderDiscover, me: renderMe }[tab])();
     window.scrollTo(0, 0);
     refreshBadge();
   }
 
   // ---- LOOKUP ----
-  function renderLookup() {
-    view.innerHTML = `
-      <form class="search" id="sform">
-        <input id="q" placeholder="输入单词或短语…" autocomplete="off" autocapitalize="off" spellcheck="false">
-        <button class="btn icon" type="button" id="pasteBtn" title="从剪贴板粘贴查词">📋</button>
-        <button class="btn primary" type="submit">查</button>
-      </form>
-      <div id="result"></div>`;
-    $("#sform").addEventListener("submit", (e) => { e.preventDefault(); doLookup($("#q").value); });
-    $("#pasteBtn").addEventListener("click", pasteAndSave);
-    const recent = getWords().slice(0, 8);
-    if (recent.length) $("#result").innerHTML =
-      `<h2 class="sec">最近保存</h2>` + recent.map((w) =>
-        `<div class="item" data-open="${w.id}"><span class="w serif">${esc(w.word)}</span>${freqChip(w.data && w.data.freq)}<span class="meta">${esc((w.data && w.data.cn) || "")}</span></div>`).join("");
-    view.querySelectorAll("[data-open]").forEach((n) => n.addEventListener("click", () => openDetail(n.dataset.open)));
-  }
-
   // ctx = the sentence the word came from, when the caller has one (?q=&ctx=,
   // mirroring the extension's #look/<term>/<context>). It is shown above the
   // card AND carried into saveWord, so 原句语境 survives the save.
+  // Show a look-up result inside the notebook tab (they are one tab now), hiding
+  // the list behind it. closeLookup() puts the list back.
+  function openLookupPane() {
+    if (current !== "notebook") go("notebook");
+    document.body.classList.add("looking");
+    return $("#result");
+  }
+  function closeLookup() {
+    document.body.classList.remove("looking");
+    const box = $("#result"); if (box) box.innerHTML = "";
+  }
   async function doLookup(term, ctx) {
     term = norm(term);
     if (!term) return;
@@ -757,9 +774,11 @@
     // 带 ctx 的粘贴/快捷指令流程除外——那一步要先让你确认是否追加这条原句。
     const already = findWord(term);
     if (already && !ctx) { openDetail(already.id); return; }
-    const q = $("#q"); if (q) q.value = term;
-    const box = $("#result");
-    box.innerHTML = `<div class="empty"><span class="spin"></span> 查询中…</div>`;
+    const box = openLookupPane();
+    if (!box) return;
+    box.innerHTML = `<div class="lookup-bar"><button class="btn" id="lkBack">← 生词本</button></div>
+      <div class="empty"><span class="spin"></span> 查询中…</div>`;
+    $("#lkBack").addEventListener("click", closeLookup);
     const seq = ++doLookup._seq;
     const p = await lookup(term);
     if (seq !== doLookup._seq) return;             // a newer look-up已经开始
@@ -775,7 +794,9 @@
       else if (ctx && !ctxKnown) saveBtn = `<button class="btn sage" id="appendBtn">＋ 添加此原句</button>`;
       else saveBtn = `<button class="btn" id="openNbBtn">📖 已在生词本 · 打开</button>`;
       const ctxCard = ctx ? contextCardHTML({ word: p.term || term, context: ctx, createdAt: now() }) : "";
-      box.innerHTML = ctxCard + cardHTML(p, { saveBtn, pending, meter: true, addExample: true });
+      box.innerHTML = `<div class="lookup-bar"><button class="btn" id="lkBack">← 生词本</button></div>`
+        + ctxCard + cardHTML(p, { saveBtn, pending, meter: true, addExample: true });
+      $("#lkBack").addEventListener("click", closeLookup);
       wireCard(box);
       wireExampleEditor(box, p, () => paint(pending));
       const sb = $("#saveBtn");
@@ -859,10 +880,10 @@
     const kindCounts = { all: words.length, word: 0, phrase: 0, idiom: 0 };
     words.forEach((w) => { kindCounts[nbKindOf(w)]++; });
     view.innerHTML = `
-      <div class="subtabs" id="nbkinds">
+      <div class="subtabs nb-only" id="nbkinds">
         ${NB_KINDS.map(([k, cn]) => `<button data-k="${k}" class="${nbKind === k ? "on" : ""}">${cn} ${kindCounts[k]}</button>`).join("")}
       </div>
-      <div class="subtabs" id="nbtabs">
+      <div class="subtabs nb-only" id="nbtabs">
         <button data-f="all" class="${nbFilter === "all" ? "on" : ""}">全部</button>
         <button data-f="due" class="${nbFilter === "due" ? "on" : ""}">待复习 ${dueWords().length}</button>
         <button data-f="learning" class="${nbFilter === "learning" ? "on" : ""}">学习中</button>
@@ -870,17 +891,19 @@
       </div>
       <form class="search" id="nbsearch" style="margin-bottom:10px">
         <input id="nbq" placeholder="搜索生词本,或输入新词直接查…" value="${esc(nbQuery)}" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="btn icon" type="button" id="pasteBtn" title="从剪贴板粘贴查词">📋</button>
         <button class="btn primary" type="submit">查</button>
       </form>
-      <div class="sortbar" id="nbsort">
+      <div class="sortbar nb-only" id="nbsort">
         <button class="catf ctrl-toggle" id="nbMore">筛选 · 排序 ▾</button>
         <span class="ctrl-wrap">排序:${NB_SORTS.map(([k, cn]) =>
           `<button class="catf${nbSort === k ? " on" : ""}" data-s="${k}">${cn}</button>`).join("")}
           <span class="muted" style="font-size:12px;flex-basis:100%">词后的标签是<b>词频</b>:极高频 / 高频 / 常用 / 中频 / 低频 / 生僻——越靠前越值得先掌握。</span>
         </span>
       </div>
-      <div id="nbcats" class="ctrl-wrap"></div>
-      <div id="nblist"></div>`;
+      <div id="result"></div>
+      <div id="nbcats" class="ctrl-wrap nb-only"></div>
+      <div id="nblist" class="nb-only"></div>`;
     view.querySelectorAll("#nbkinds button").forEach((b) => b.addEventListener("click", () => { nbKind = b.dataset.k; nbScene = null; renderNotebook(); }));
     view.querySelectorAll("#nbtabs button").forEach((b) => b.addEventListener("click", () => { nbFilter = b.dataset.f; renderNotebook(); }));
     // one toggle instead of three permanent rows of controls above the list
@@ -893,9 +916,10 @@
     view.querySelectorAll("#nbsort [data-s]").forEach((b) => b.addEventListener("click", () => { nbSort = b.dataset.s; renderNotebook(); }));
     $("#nbsearch").addEventListener("submit", (e) => {
       e.preventDefault();
-      const t = nbQuery.trim();
-      if (t) { go("lookup"); doLookup(t); }      // 生词本里直接查词:已收藏的会打开词条,新词走查询
+      const t = ($("#nbq") ? $("#nbq").value : nbQuery).trim();
+      if (t) doLookup(t);      // same tab: saved words open their entry, new ones get looked up
     });
+    $("#pasteBtn").addEventListener("click", pasteAndSave);
     const qi = $("#nbq");
     qi.addEventListener("input", () => { nbQuery = qi.value; drawNbList(); });
 
@@ -931,7 +955,7 @@
           ? `<div class="empty"><div class="big">🔍</div>生词本里没有「${esc(q)}」。<div class="row" style="justify-content:center;margin-top:12px"><button class="btn primary" id="nbLookup">查一下「${esc(q)}」</button></div></div>`
           : `<div class="empty"><div class="big">📖</div>${nbScene ? "这个分类下暂无生词,点「全部」。" : "还没有生词。去「查词」保存几个吧。"}</div>`;
         const nl = $("#nbLookup");
-        if (nl) nl.addEventListener("click", () => { go("lookup"); doLookup(q); });
+        if (nl) nl.addEventListener("click", () => doLookup(q));
         return;
       }
       box.innerHTML = list.map((w) => {
@@ -1061,12 +1085,13 @@
     const p = await lookupFull(w.word);
     const changed = mergeIntoWord(id, p);
     if (manual) toast(changed ? "已增补 ✓" : "没有可增补的新内容");
-    if (current === "notebook" || current === "lookup") { if ($("#det")) openDetail(id); }
+    if (current === "notebook") { if ($("#det")) openDetail(id); }
   }
 
   function openDetail(id) {
     const w = getWords().find((x) => x.id === id);
     if (!w) return;
+    document.body.classList.remove("looking");
     const auto = getSettings().autoEnrich !== false && !_supplemented.has(id) && needsSupplement(w);
     view.innerHTML = `<div class="row" style="margin-bottom:12px">
         <button class="btn" id="back">← 返回</button>
@@ -1115,7 +1140,7 @@
     });
     $("#sup").addEventListener("click", () => supplement(id, true));
     if (auto) supplement(id, false);
-    $("#back").addEventListener("click", () => go(current === "lookup" ? "lookup" : "notebook"));
+    $("#back").addEventListener("click", () => go("notebook"));
     $("#del").addEventListener("click", () => {
       const snapshot = getWords().find((x) => x.id === id);
       removeWord(id); go("notebook"); refreshBadge();
@@ -1203,18 +1228,69 @@
     return false;
   }
 
+  // ---- streak / daily progress -------------------------------------------
+  // A queue of due cards is a chore. A streak you don't want to break, a goal you
+  // can finish in five minutes, and a visible "今天还差 3 个" are what actually get
+  // someone to open the app — so the review tab opens on that, not on a card.
+  const dayKey = (t) => { const d = new Date(t || now()); return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate(); };
+  function revStats() {
+    const s2 = getSettings();
+    const r = s2.rev || { day: "", count: 0, streak: 0, lastDay: "" };
+    if (r.day !== dayKey()) { r.count = 0; r.day = dayKey(); }
+    return r;
+  }
+  function bumpRevStats() {
+    const s2 = getSettings();
+    const r = revStats();
+    const today = dayKey();
+    if (r.lastDay !== today) {
+      const y = dayKey(now() - DAY);
+      r.streak = r.lastDay === y ? (r.streak || 0) + 1 : 1;
+      r.lastDay = today;
+    }
+    r.count = (r.count || 0) + 1;
+    s2.rev = r; setSettings(s2);
+  }
+
   function renderReview() {
     const due = scopedDue();
     const scopeBar = `<div class="subtabs" id="revscope">${REV_SCOPES.map(([k, cn]) =>
       `<button data-rs="${k}" class="${revScope === k ? "on" : ""}">${cn}</button>`).join("")}</div>`;
-    if (!due.length) {
-      view.innerHTML = scopeBar + `<div class="empty"><div class="big">✅</div>${
-        revScope === "phrase" ? "没有到期的短语/习语。" : "没有待复习的词。"}<br><span class="muted">保存新词后会按间隔重复排期。</span></div>`;
-      wireScope(); session = null; return;
+    // an in-progress session goes straight back to the card
+    if (session && session.queue.length && session.scope === revScope) { drawCard(); return; }
+    const st = revStats();
+    const goal = getSettings().dailyGoal || 20;
+    const doneToday = st.count || 0;
+    const pct = Math.min(100, Math.round((doneToday / goal) * 100));
+    const chunks = due.filter(isChunk).length;
+    const est = Math.max(1, Math.round(Math.min(due.length, goal - doneToday || due.length) * 0.25));
+    view.innerHTML = scopeBar + `
+      <div class="card rev-home">
+        <div class="rev-streak">${st.streak > 0 ? `🔥 连续 <b>${st.streak}</b> 天` : "今天开个头"}</div>
+        <div class="stat" style="font-size:34px">${due.length}</div>
+        <div class="muted">个待复习 · 其中 ${chunks} 个是短语/习语</div>
+        <div class="meter"><i style="width:${pct}%"></i></div>
+        <div class="muted" style="font-size:12px">今日 ${doneToday} / ${goal} · 大约 ${est} 分钟能做完</div>
+        ${due.length ? `<div class="row" style="margin-top:16px">
+            <button class="btn primary" id="revStart" style="flex:1;padding:15px;font-size:16px">开始复习</button>
+          </div>
+          <div class="row" style="margin-top:8px;justify-content:center">
+            ${[10, 20, 0].map((n) => `<button class="catf" data-len="${n}">${n ? n + " 个" : "全部"}</button>`).join("")}
+          </div>`
+          : `<div class="muted" style="margin-top:16px">✅ ${revScope === "phrase" ? "没有到期的短语/习语。" : "都复习完了,明天见。"}</div>`}
+      </div>
+      ${doneToday ? `<div class="card"><h2 class="sec">今天</h2><div class="muted" style="font-size:13px">已复习 <b>${doneToday}</b> 个${doneToday >= goal ? " · 目标达成 🎉" : ` · 还差 ${goal - doneToday} 个`}</div></div>` : ""}`;
+    wireScope();
+    const start = $("#revStart");
+    if (start) {
+      const begin = (n) => {
+        const q = n ? due.slice(0, n) : due.slice();
+        session = { queue: q, total: q.length, done: 0, showBack: false, scope: revScope };
+        drawCard();
+      };
+      start.addEventListener("click", () => begin(Math.min(due.length, goal)));
+      view.querySelectorAll("[data-len]").forEach((b) => b.addEventListener("click", () => begin(+b.dataset.len)));
     }
-    if (!session || !session.queue.length || session.scope !== revScope)
-      session = { queue: due.slice(), total: due.length, done: 0, showBack: false, scope: revScope, tried: false };
-    drawCard();
   }
   function wireScope() {
     view.querySelectorAll("#revscope button").forEach((b) => b.addEventListener("click", () => {
@@ -1224,8 +1300,11 @@
   function drawCard() {
     const w = session.queue[0];
     if (!w) {
-      view.innerHTML = `<div class="empty"><div class="big">🎉</div>本轮完成！复习了 ${session.total} 个。</div>`;
-      session = null; refreshBadge(); return;
+      const n = session.total;
+      session = null; refreshBadge();
+      renderReview();
+      toast(`🎉 本轮完成 · ${n} 个`);
+      return;
     }
     const pct = Math.round((session.done / session.total) * 100);
     const d = w.data || {};
@@ -1298,6 +1377,7 @@
     if (rec) { rec.srs = schedule(rec.srs, g); rec.updatedAt = now(); setWords(words); }
     session.queue.shift();
     if (g === "again" && rec) session.queue.push(rec); // re-show at end
+    else bumpRevStats();
     session.done += 1; session.showBack = false; session.verdict = null;
     drawCard();
   }
@@ -1407,6 +1487,14 @@
     return { mode: "above", estVocab: v, startIdx, left: poolLen - startIdx };
   }
 
+  // how far into a chunk pool the 摸底 says we can skip (0 when never assessed)
+  function chunkFrontier(src, poolLen) {
+    const c = getAssess().chunk;
+    const b = c && c.bySrc && c.bySrc[src];
+    if (!b) return 0;
+    return Math.max(0, Math.min(b.frontier || 0, Math.max(0, poolLen - 20)));
+  }
+
   function discoverPool(kind) {
     const known = knownSet();
     const term = (x) => (typeof x === "string" ? x : x.term || x.phrase || x.word || (Array.isArray(x) ? x[0] : ""));
@@ -1432,14 +1520,21 @@
       const pl = (window.LEXIS_PHRASE_LIST || []).map((x) => x.term);
       const seed = (window.LEXIS_PHRASE_SEED_FLAT || []).map(term);
       const seen = new Set();
-      return pl.concat(seed).filter((t) => {
+      const all = pl.concat(seed).filter((t) => {
         const k = norm(t);
         if (!k || known.has(k) || seen.has(k)) return false;
         seen.add(k); return true;
       });
+      return all.slice(chunkFrontier("phrase", all.length));
     }
-    if (kind === "pv") return (window.LEXIS_PHAVE_LIST || []).map((x) => x.term).filter((t) => !known.has(norm(t)));
-    if (kind === "idioms") return Object.keys(window.LEXIS_IDIOM_SCENE || {}).filter((p) => !known.has(norm(p)));
+    if (kind === "pv") {
+      const pool = (window.LEXIS_PHAVE_LIST || []).map((x) => x.term).filter((t) => !known.has(norm(t)));
+      return pool.slice(chunkFrontier("pv", pool.length));
+    }
+    if (kind === "idioms") {
+      const pool = Object.keys(window.LEXIS_IDIOM_SCENE || {}).filter((p) => !known.has(norm(p)));
+      return pool.slice(chunkFrontier("idiom", pool.length));
+    }
     return [];
   }
   // one honest line telling you WHY this batch is what it is
@@ -1539,6 +1634,7 @@
     const knownN = new Set([].concat(a.known.map(norm), words.map((w) => w.lookup))).size;
     const rEst = a.reading ? readingEstimate(a.reading) : null;
     const incomplete = incompleteWords().length;
+    const ck = chunkState();
     view.innerHTML = `
       <div class="card">
         <h2 class="sec">概览</h2>
@@ -1561,11 +1657,23 @@
         </div>
       </div>
       <div class="card">
+        <h2 class="sec">语块产出能力</h2>
+        ${ck ? `<div class="row" style="gap:14px">${["phrase", "pv", "idiom"].map((k) => {
+              const b = ck.bySrc[k]; if (!b) return "";
+              return `<div><div class="stat" style="font-size:20px">${Math.round(b.pct * 100)}%</div><div class="muted" style="font-size:12px">${CHUNK_SRC_CN[k]}</div></div>`;
+            }).join("")}</div>
+            <div class="muted" style="font-size:12px;margin-top:6px">Discover 已按这个结果跳过你能用的部分。</div>`
+          : `<p class="muted" style="font-size:13px;margin:0">词汇量上去之后,卡住的通常不是单词而是语块。摸一次底,Discover 就知道该从哪里开始推短语和习语。</p>`}
+        <div class="row" style="margin-top:8px"><button class="btn ${ck ? "" : "primary"}" id="chunkBtn">🧩 短语/习语摸底${ck ? "(重做)" : ""}</button>
+          ${ck ? `<button class="btn" id="chunkRes">看结果</button>` : ""}</div>
+      </div>
+      <div class="card">
         <h2 class="sec">设置</h2>
         <label class="set">中文释义 <input type="checkbox" id="setCn" ${s.chinese ? "checked" : ""}></label>
         <label class="set">显示例句 <input type="checkbox" id="setEx" ${s.showExamples ? "checked" : ""}></label>
         <label class="set">自动增补(例句/中文/词频) <input type="checkbox" id="setAuto" ${s.autoEnrich !== false ? "checked" : ""}></label>
         <label class="set">每日新词上限 <input type="number" id="setLimit" value="${s.dailyNewLimit}" min="1" max="100" style="width:70px"></label>
+        <label class="set">每日复习目标 <input type="number" id="setGoal" value="${s.dailyGoal || 20}" min="5" max="200" step="5" style="width:70px"></label>
       </div>
       <div class="row" style="margin:2px 0 12px"><button class="btn" id="advToggle" style="width:100%">⚙️ 数据与同步 ▾</button></div>
       <div id="adv" class="adv">
@@ -1590,7 +1698,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.54.0 · 数据仅存本机浏览器</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.55.0 · 数据仅存本机浏览器</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
@@ -1601,8 +1709,11 @@
     $("#setEx").addEventListener("change", (e) => { s.showExamples = e.target.checked; setSettings(s); });
     $("#setAuto").addEventListener("change", (e) => { s.autoEnrich = e.target.checked; setSettings(s); });
     $("#setLimit").addEventListener("change", (e) => { s.dailyNewLimit = +e.target.value || 15; setSettings(s); });
+    $("#setGoal").addEventListener("change", (e) => { s.dailyGoal = +e.target.value || 20; setSettings(s); });
     $("#assessBtn").addEventListener("click", startAssess);
     $("#readAssessBtn").addEventListener("click", renderReadingPick);
+    $("#chunkBtn").addEventListener("click", renderChunkAssess);
+    if ($("#chunkRes")) $("#chunkRes").addEventListener("click", renderChunkResult);
     $("#setGistToken").addEventListener("change", (e) => { s.gistToken = e.target.value.trim(); setSettings(s); });
     $("#setGistId").addEventListener("change", (e) => { s.gistId = e.target.value.trim(); setSettings(s); startSyncPolling(); });
     $("#syncBtn").addEventListener("click", () => cloudSync($("#syncBtn")));
@@ -1898,6 +2009,107 @@
     });
   }
 
+
+  // ---- 短语 / 习语摸底 -----------------------------------------------------
+  // Frequency alone can't tell Discover where to start on chunks: "have to" is
+  // rank 1 and trivially known, while a rank-300 phrasal verb may not be. So we
+  // sample across the whole rank range and ask the one question that matters for
+  // this gap — can you PRODUCE it, not can you recognise it. The lowest rank you
+  // still can't produce becomes the frontier Discover starts from.
+  function chunkSample() {
+    const pick = (arr, n) => {
+      if (!arr.length) return [];
+      const step = Math.max(1, Math.floor(arr.length / n));
+      const out = [];
+      for (let i = 0; i < arr.length && out.length < n; i += step) out.push(arr[i]);
+      return out;
+    };
+    const pl = (window.LEXIS_PHRASE_LIST || []).map((x, i) => ({ term: x.term, src: "phrase", pos: i, ex: x.example }));
+    const pv = (window.LEXIS_PHAVE_LIST || []).map((x, i) => ({ term: x.term, src: "pv", pos: i, ex: x.example }));
+    const id = Object.keys(window.LEXIS_IDIOM_SCENE || {}).map((t, i) => ({ term: t, src: "idiom", pos: i, ex: "" }));
+    return pick(pl, 24).concat(pick(pv, 14), pick(id, 12));
+  }
+  function chunkState() { return getAssess().chunk || null; }
+  const CHUNK_SRC_CN = { phrase: "固定表达", pv: "短语动词", idiom: "习语" };
+
+  function renderChunkAssess() {
+    const items = chunkSample();
+    const marked = new Set(((chunkState() || {}).unknown) || []);
+    view.innerHTML = `
+      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← 返回</button></div>
+      <div class="card">
+        <h2 class="sec">短语 / 习语摸底</h2>
+        <p class="muted" style="font-size:13px;margin:0">下面是按常用度<b>均匀取样</b>的 ${items.length} 个语块。<b>点掉你「说不出来」的</b>——看得懂但轮到自己表达时想不起用它,就算说不出来。这正是「单词都认识却说不出口」的那部分。</p>
+      </div>
+      ${["phrase", "pv", "idiom"].map((src) => {
+        const g = items.filter((x) => x.src === src);
+        if (!g.length) return "";
+        return `<div class="card"><h2 class="sec">${CHUNK_SRC_CN[src]} · ${g.length}</h2>
+          <div class="row">${g.map((x) =>
+            `<button class="chunk-chip${marked.has(x.term) ? " unk" : ""}" data-ck="${esc(x.term)}">${esc(x.term)}</button>`).join("")}</div></div>`;
+      }).join("")}
+      <div class="row"><button class="btn primary" id="ckDone" style="flex:1;padding:13px">算一下 →</button>
+        <span class="muted" id="ckN" style="font-size:12px">已点 ${marked.size}</span></div>`;
+    $("#back").addEventListener("click", () => go("me"));
+    view.querySelectorAll("[data-ck]").forEach((b) => b.addEventListener("click", () => {
+      const t = b.dataset.ck;
+      if (marked.has(t)) marked.delete(t); else marked.add(t);
+      b.classList.toggle("unk", marked.has(t));
+      $("#ckN").textContent = "已点 " + marked.size;
+    }));
+    $("#ckDone").addEventListener("click", () => {
+      const a = getAssess();
+      const bySrc = {};
+      ["phrase", "pv", "idiom"].forEach((src) => {
+        const g = items.filter((x) => x.src === src);
+        const bad = g.filter((x) => marked.has(x.term));
+        // frontier = the most common thing you still can't produce; everything
+        // easier than that is a waste of your time to be shown.
+        const frontier = bad.length ? Math.min.apply(null, bad.map((x) => x.pos)) : (g.length ? g[g.length - 1].pos : 0);
+        bySrc[src] = { seen: g.length, unknown: bad.length, frontier, pct: g.length ? 1 - bad.length / g.length : 1 };
+      });
+      a.chunk = { at: now(), unknown: Array.from(marked), bySrc };
+      // words you could produce count as mastered, so Discover stops offering them
+      const good = items.filter((x) => !marked.has(x.term)).map((x) => x.term);
+      a.known = Array.from(new Set([].concat(a.known || [], good)));
+      setAssess(a);
+      renderChunkResult();
+    });
+  }
+
+  function renderChunkResult() {
+    const c = chunkState();
+    if (!c) { renderChunkAssess(); return; }
+    const rows = ["phrase", "pv", "idiom"].map((src) => {
+      const b = c.bySrc[src]; if (!b) return "";
+      return `<div class="lvl">
+        <span class="lvl-bl mfreq">${CHUNK_SRC_CN[src]}</span>
+        <span class="lvl-track"><i style="width:${Math.round(b.pct * 100)}%"></i></span>
+        <span class="lvl-n">能说出 ${Math.round(b.pct * 100)}% · ${b.seen} 取样</span></div>`;
+    }).join("");
+    const unk = c.unknown || [];
+    view.innerHTML = `
+      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← 返回</button></div>
+      <div class="card"><h2 class="sec">语块产出能力</h2>${rows}
+        <div class="muted" style="font-size:12px;margin-top:8px">Discover 的三个语块 tab 已按这个结果<b>跳过你已经能用的部分</b>,从你说不出来的地方开始推。</div></div>
+      ${unk.length ? `<div class="card"><h2 class="sec">你说不出来的 · ${unk.length}</h2>
+        <div class="row">${unk.slice(0, 60).map((t) => `<span class="chip" data-look="${esc(t)}">${esc(t)}</span>`).join("")}</div>
+        <div class="row" style="margin-top:10px"><button class="btn sage" id="ckAdd">全部加入生词本</button></div></div>` : ""}
+      <div class="row"><button class="btn" id="ckAgain" style="flex:1">重新摸底</button><button class="btn" id="ckDisc" style="flex:1">去学这些语块 →</button></div>`;
+    $("#back").addEventListener("click", () => go("me"));
+    $("#ckAgain").addEventListener("click", renderChunkAssess);
+    $("#ckDisc").addEventListener("click", () => { dTab = "pv"; go("discover"); });
+    wireCard(view);
+    const add = $("#ckAdd");
+    if (add) add.addEventListener("click", async () => {
+      const list = unk.filter((t) => !findWord(t));
+      if (!list.length) { toast("都已经在生词本里了"); return; }
+      add.disabled = true;
+      for (let i = 0; i < list.length; i++) { add.textContent = `加入中 ${i + 1}/${list.length}…`; saveWord(await lookupFull(list[i])); }
+      toast(`已加入 ${list.length} 个语块`); refreshBadge(); renderChunkResult();
+    });
+  }
+
   // ---- quick assess (mark words known from a frequency-graded sample) ----
   function startAssess() {
     const pool = (window.LEXIS_FREQ || []).map((w) => (typeof w === "string" ? w : w.term || w.word)).filter(Boolean);
@@ -1936,8 +2148,7 @@
     if (!term) return;
     const ctx = (context || "").trim();
     const src = (source || "").trim() || "粘贴保存";
-    const box = $("#result");
-    if ($("#q")) $("#q").value = term;
+    const box = openLookupPane();
     if (box) box.innerHTML = `<div class="empty"><span class="spin"></span> 正在保存 <b>${esc(term)}</b>…</div>`;
     if (findWord(term)) {
       // already saved — append this new original sentence as another dated sighting
@@ -1974,7 +2185,7 @@
     } catch (e) { text = ""; }
     text = (text || "").trim();
     if (!text) { toast("剪贴板是空的,先在别的 App 里拷贝一个单词或一句话"); return; }
-    if (current !== "lookup") go("lookup");
+    if (current !== "notebook") go("notebook");
     const alphaWords = text.match(/[A-Za-z][A-Za-z'’-]*/g) || [];
     if (!alphaWords.length) { toast("剪贴板里没有英文词"); return; }
     // single word → look it up first (Save button on the card); a sentence → tap the target word
@@ -1985,7 +2196,7 @@
   // paste of a whole sentence: tap the target word → LOOK IT UP (with the sentence as 原句),
   // then decide to save from the card. Phrase → look up the whole selection.
   function showWordPicker(sentence, words) {
-    const box = $("#result"); if (!box) return;
+    const box = openLookupPane(); if (!box) return;
     const html = esc(sentence).replace(/[A-Za-z][A-Za-z'’-]*/g, (m) => `<span class="pickw" data-w="${esc(m)}">${m}</span>`);
     box.innerHTML = `<div class="card"><h2 class="sec">点选要查的词</h2>
       <div class="ex pick-sentence">${html}</div>
@@ -1997,7 +2208,7 @@
 
   // ---- boot ----
   document.querySelectorAll(".tabbar button").forEach((b) => b.addEventListener("click", () => go(b.dataset.tab)));
-  go("lookup");
+  go("notebook");
   refreshBadge();
   try {
     const qs = new URLSearchParams(location.search);
@@ -2009,7 +2220,7 @@
     }
     // ?q=<term> — look up WITHOUT saving (mirrors the extension's #look/<term> deep link)
     const q = (qs.get("q") || "").trim();
-    if (!add && q) { go("lookup"); doLookup(q, (qs.get("ctx") || "").trim()); }
+    if (!add && q) doLookup(q, (qs.get("ctx") || "").trim());
   } catch (e) {}
 
   // auto-sync: pull the shared gist on open, and again whenever the app regains focus
