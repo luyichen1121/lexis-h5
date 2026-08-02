@@ -77,6 +77,8 @@ button.btn:active{transform:translateY(1px)}
 
 /* lists */
 .item{display:flex;align-items:center;gap:12px;padding:12px 4px;border-bottom:1px solid var(--line);cursor:pointer}
+/* a passage already read — still openable, but it can't move the estimate */
+.item.pass-done{opacity:.5}
 .item:last-child{border-bottom:0}
 .item .w{font-family:Georgia,serif;font-size:18px}
 .item .meta{font-size:12px;color:var(--ink2)}

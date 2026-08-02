@@ -2327,7 +2327,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.66.0 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.67.0 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
@@ -2536,6 +2536,10 @@
     const r = readingState();
     const done = new Set(r.passages || []);
     const est = readingEstimate(r);
+    // Unread first: re-reading a passage adds no judgements (the estimator
+    // counts each word type once), so what can still move the number goes on top.
+    const fresh = passages.filter((p) => !done.has(p.id));
+    const ordered = fresh.concat(passages.filter((p) => done.has(p.id)));
     view.innerHTML = `
       <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← Back</button></div>
       <div class="card">
@@ -2543,9 +2547,10 @@
         <p class="muted" style="font-size:13px;margin:0">Read a short passage and <b>tap only the words you don't know</b>。Everything you leave counts as known — about 100 judgements per passage, far faster than ticking one at a time. Two or more passages gives a sharper number.</p>
         ${est ? `<div class="row" style="margin-top:10px"><span class="stat">${est.estVocab.toLocaleString()}</span><span class="muted">current estimate · sampled  ${est.sampled}  · confidence  ${({ high: "high", mid: "medium", low: "low" })[est.confidence]}</span></div>` : ""}
       </div>
-      ${passages.map((p) => `<div class="item" data-pass="${esc(p.id)}">
+      ${!fresh.length && passages.length ? `<div class="card"><p class="muted" style="font-size:12px;margin:0">You have read all ${passages.length}. Re-reading one adds nothing — each word type is only counted once — so the sharper number now comes from the <b>phrase &amp; idiom check</b>, which draws a new set every round.</p></div>` : ""}
+      ${ordered.map((p) => `<div class="item${done.has(p.id) ? " pass-done" : ""}" data-pass="${esc(p.id)}">
         <div style="min-width:0"><div class="w serif">${esc(p.title)}</div><div class="meta">${esc(p.cn)} · ~${p.text.split(/\s+/).length} words</div></div>
-        <span class="st chip">${done.has(p.id) ? "read · read again" : "Start"}</span></div>`).join("")}
+        <span class="st chip">${done.has(p.id) ? "read" : "Start"}</span></div>`).join("")}
       <div class="row" style="margin-top:14px">
         <button class="btn" id="wordwise">Tick word by word instead</button>
         ${est ? `<button class="btn sage" id="seeRes">See the result</button>` : ""}
@@ -2651,7 +2656,14 @@
         <div class="row" style="margin-top:10px"><button class="btn sage" id="addUnk">Add all to notebook</button></div></div>` : ""}
       <div class="row"><button class="btn" id="more" style="flex:1">Read another →</button><button class="btn" id="toDisc" style="flex:1">Learn new words in Discover</button></div>`;
     $("#back").addEventListener("click", () => go("me"));
-    $("#more").addEventListener("click", renderReadingPick);
+    // "Read another" means another one — open an UNREAD passage directly instead
+    // of returning to a list whose first card is the one you just finished.
+    $("#more").addEventListener("click", () => {
+      const readIds = new Set(readingState().passages || []);
+      const left = (window.LEXIS_PASSAGES || []).filter((p) => !readIds.has(p.id));
+      if (!left.length) { renderReadingPick(); return; }
+      renderPassage(left[Math.floor(Math.random() * left.length)].id);
+    });
     $("#toDisc").addEventListener("click", () => go("discover"));
     wireCard(view);
     const au = $("#addUnk");
@@ -2674,30 +2686,29 @@
   // sample across the whole rank range and ask the one question that matters for
   // this gap — can you PRODUCE it, not can you recognise it. The lowest rank you
   // still can't produce becomes the frontier Discover starts from.
+  // Every round asks about chunks you have NOT been asked before — see
+  // lexisChunkSample() in vocab.js. Redoing it used to hand back the same 50.
   function chunkSample() {
-    const pick = (arr, n) => {
-      if (!arr.length) return [];
-      const step = Math.max(1, Math.floor(arr.length / n));
-      const out = [];
-      for (let i = 0; i < arr.length && out.length < n; i += step) out.push(arr[i]);
-      return out;
-    };
-    const pl = (window.LEXIS_PHRASE_LIST || []).map((x, i) => ({ term: x.term, src: "phrase", pos: i, ex: x.example }));
-    const pv = (window.LEXIS_PHAVE_LIST || []).map((x, i) => ({ term: x.term, src: "pv", pos: i, ex: x.example }));
-    const id = Object.keys(window.LEXIS_IDIOM_SCENE || {}).map((t, i) => ({ term: t, src: "idiom", pos: i, ex: "" }));
-    return pick(pl, 24).concat(pick(pv, 14), pick(id, 12));
+    const c = chunkState() || {};
+    return window.lexisChunkSample ? window.lexisChunkSample(c.seen || []) : [];
   }
   function chunkState() { return getAssess().chunk || null; }
   const CHUNK_SRC_CN = { phrase: "Fixed expressions", pv: "Phrasal verbs", idiom: "Idioms" };
 
   function renderChunkAssess() {
     const items = chunkSample();
-    const marked = new Set(((chunkState() || {}).unknown) || []);
+    // A new round starts BLANK. Pre-ticking it with the previous round's answers
+    // was half of why redoing the check felt like nothing had changed.
+    const marked = new Set();
+    const cst = chunkState() || {};
+    const round = (cst.rounds || 0) + 1;
     view.innerHTML = `
-      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← Back</button></div>
+      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← Back</button>
+        ${round > 1 ? `<button class="btn" id="ckReset" style="margin-left:auto">Start over</button>` : ""}</div>
       <div class="card">
         <h2 class="sec">Phrase & idiom check</h2>
         <p class="muted" style="font-size:13px;margin:0">${items.length} chunks <b>sampled evenly</b> across the frequency range. <b>Tap the ones you couldn't produce</b>——Recognising it but not reaching for it when you speak counts as couldn't. That gap is exactly "I know every word and still can't say it".</p>
+        ${round > 1 ? `<p class="muted" style="font-size:12px;margin:8px 0 0">Round ${round} · <b>all new</b> — ${(cst.seen || []).length} chunks judged so far and none of them are here.${items.freshLeft === 0 ? " Every pool has been through once, so this round revisits earlier ones." : ""} Results add to the previous rounds.</p>` : ""}
       </div>
       ${["phrase", "pv", "idiom"].map((src) => {
         const g = items.filter((x) => x.src === src);
@@ -2715,18 +2726,16 @@
       b.classList.toggle("unk", marked.has(t));
       $("#ckN").textContent = marked.size + " tapped";
     }));
+    if ($("#ckReset")) $("#ckReset").addEventListener("click", () => {
+      const a = getAssess(); a.chunk = null; setAssess(a);
+      toast("Chunk check reset — the next round starts from the top again");
+      renderChunkAssess();
+    });
     $("#ckDone").addEventListener("click", () => {
       const a = getAssess();
-      const bySrc = {};
-      ["phrase", "pv", "idiom"].forEach((src) => {
-        const g = items.filter((x) => x.src === src);
-        const bad = g.filter((x) => marked.has(x.term));
-        // frontier = the most common thing you still can't produce; everything
-        // easier than that is a waste of your time to be shown.
-        const frontier = bad.length ? Math.min.apply(null, bad.map((x) => x.pos)) : (g.length ? g[g.length - 1].pos : 0);
-        bySrc[src] = { seen: g.length, unknown: bad.length, frontier, pct: g.length ? 1 - bad.length / g.length : 1 };
-      });
-      a.chunk = { at: now(), unknown: Array.from(marked), bySrc };
+      // ADD to the previous rounds rather than replacing them — frontier is the
+      // most common thing you still can't produce, across every round.
+      a.chunk = Object.assign(window.lexisChunkTally(a.chunk, items, marked), { at: now() });
       // words you could produce count as mastered, so Discover stops offering them
       const good = items.filter((x) => !marked.has(x.term)).map((x) => x.term);
       a.known = Array.from(new Set([].concat(a.known || [], good)));
@@ -2749,11 +2758,11 @@
     view.innerHTML = `
       <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← Back</button></div>
       <div class="card"><h2 class="sec">Chunk production</h2>${rows}
-        <div class="muted" style="font-size:12px;margin-top:8px">Discover 's three chunk tabs now <b>skip what you can already use</b>,and start where you couldn't produce it.</div></div>
+        <div class="muted" style="font-size:12px;margin-top:8px">${c.rounds > 1 ? `<b>${c.rounds} rounds</b> · ${(c.seen || []).length} chunks judged in total — every round asks about new ones and these totals include all of them.<br>` : ""}Discover 's three chunk tabs now <b>skip what you can already use</b>,and start where you couldn't produce it.</div></div>
       ${unk.length ? `<div class="card"><h2 class="sec">Couldn't produce ·  ${unk.length}</h2>
         <div class="row">${unk.slice(0, 60).map((t) => `<span class="chip" data-look="${esc(t)}">${esc(t)}</span>`).join("")}</div>
         <div class="row" style="margin-top:10px"><button class="btn sage" id="ckAdd">Add all to notebook</button></div></div>` : ""}
-      <div class="row"><button class="btn" id="ckAgain" style="flex:1">Redo the check</button><button class="btn" id="ckDisc" style="flex:1">Study these chunks →</button></div>`;
+      <div class="row"><button class="btn" id="ckAgain" style="flex:1">Another 50 chunks →</button><button class="btn" id="ckDisc" style="flex:1">Study these chunks →</button></div>`;
     $("#back").addEventListener("click", () => go("me"));
     $("#ckAgain").addEventListener("click", renderChunkAssess);
     $("#ckDisc").addEventListener("click", () => { dTab = "pv"; go("discover"); });

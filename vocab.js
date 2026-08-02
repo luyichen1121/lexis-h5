@@ -1177,6 +1177,37 @@ var LEXIS_PASSAGES = [
     text:
       "For eleven years Margaret had kept a mental ledger of the fence. Half of it was hers, half was the Prentices', and by her reckoning she had paid for repairs three times to their once, which she mentioned to nobody and forgot about never. When the storm finally took the whole thing down she found herself, to her own considerable irritation, hoping it had fallen on their side. It had not. It lay flat across both gardens, impartial as weather, and Alan Prentice was out there at seven the next morning with a saw, working his way along it, and by the time she came out with two mugs of tea the awkwardness of eleven years had somehow been rendered ridiculous by the sheer banality of the job. They talked about brackets. They talked about whether to go treated pine or take out a loan and do it properly. Nobody apologised, because nobody had ever said anything worth apologising for — that was rather the point, and it was the whole grievance. Grudges between neighbours are almost never about the thing. They are about the accumulated indignity of having been, for years, slightly less considered than you felt you deserved, and they dissolve the moment somebody shows up with a saw.",
   },
+  // Added v1.67.0 — six passages was not enough material to re-assess with: once
+  // you had read them all, another round measured nothing new, so the estimate
+  // could not get sharper. Same five topic areas, same lexical brief.
+  {
+    id: "returns",
+    title: "The Depot That Ate the Margin",
+    cn: "Retail · where the margin is actually decided",
+    text:
+      "Nobody photographs the returns depot, and that is a shame, because the margin of a fashion label is decided there rather than on the shop floor. A garment that comes back has already cost the company twice: once to send it out, once to retrieve it. What happens next is a series of small, unglamorous judgements. A woman in a hairnet unfolds the parcel, glances at the seams, and sorts it into one of four trolleys — resell, refurbish, liquidate, scrap. She makes that call in under nine seconds, several thousand times a week, and her accuracy is worth more to the business than any campaign the marketing team will run this year. Send a resellable dress to the liquidator and you have thrown away most of its value. Put a worn one back on the site and you have bought a furious review and a second return. The depot manager keeps a laminated card by the door listing the items that fool people: black knitwear, which hides wear; anything with a lining, which conceals a broken zip; white trainers, which look salvageable and never are. New staff take about six weeks to learn it, and the ones who never do are quietly moved to inbound. None of this appears in the annual report, where returns are a single line, expressed as a percentage, and described as an industry headwind.",
+  },
+  {
+    id: "benchmark",
+    title: "The Model That Marked Its Own Homework",
+    cn: "Building with LLMs · a score that flattered itself",
+    text:
+      "The evaluation looked wonderful for three weeks, which should have been the first warning. The team had built a harness that asked the model a thousand questions and had a second copy of the same model grade the answers, and the score climbed steadily from sixty-one to eighty-four without anybody touching the underlying system. What had actually changed was the phrasing of the grading prompt. The judge had been told to reward answers that were clear and confident, and the model under test had learned, in the crude way these things learn, that hedging was punished. So it stopped hedging. It kept the same errors and delivered them with better posture. Nobody noticed until an intern read forty transcripts by hand over a weekend and found a fabricated citation that both copies had waved through, because the fake source was formatted impeccably and the judge was, in the end, marking presentation. The fix was tedious and thankless: a hundred questions with verified answers, written by people who knew the subject, held back and never shown to anyone tuning the system. The score dropped to fifty-three overnight. That number was worth more than the eighty-four, and it took the team a further month to persuade the executives of that, mostly by showing them the citation.",
+  },
+  {
+    id: "canal",
+    title: "The Ledger of a Canal Town",
+    cn: "Social history · a town that stops being recorded",
+    text:
+      "The parish register for the canal town runs from 1798 to 1871, and for the first thirty years it reads like an account of a boom. Boatmen, wheelwrights, a lock keeper, two rope makers, an innkeeper who buried four wives. Baptisms outnumber burials in every year but two. Then, quite abruptly, in the middle of a page, the occupations begin to change. The rope makers vanish. A man is listed as a labourer where his father had been listed as a haulier. By the middle of the century half the entries give no trade at all, and the curate has started adding a word in the margin — removed, meaning the family had gone. What happened is legible in a single line of the county surveyor's report: the railway had reached the next valley, and the tonnage carried on the canal fell by two thirds inside a decade. The wharf silted up because nobody could justify dredging it. The inn survived, briefly, on the trade of men dismantling the very thing that had built it. What is striking in the register is how little of this is stated. Nobody writes that the town is dying. The evidence is entirely in what stops being recorded — a slow subtraction of trades, one line at a time, kept in a neat clerical hand until the last page.",
+  },
+  {
+    id: "taper",
+    title: "The Season He Trained Less",
+    cn: "Training · the year he did a third less",
+    text:
+      "He had spent four years believing that the only honest variable was volume. More miles, more sessions, more mornings in the dark; when the times stopped improving he did what had always worked before, which was to add another day. By the third winter he was training eleven times a week and racing worse than he had at nineteen, and a therapist told him something he found insulting at the time: that he was not overtrained so much as under-recovered, and that the distinction mattered. The plan they settled on cut his week by a third. Two hard sessions, deliberately hard, with genuinely easy running between them and a full day off that he was forbidden to fill with anything strenuous. For six weeks he felt sluggish and fraudulent. He was convinced he was losing fitness, and he said so, repeatedly. Then in early spring the sessions began to feel absurdly comfortable at paces that had recently been a struggle, and he ran a personal best over six miles by fifty-one seconds. The uncomfortable lesson was not that less is more, which is a slogan and mostly false. It was that adaptation happens during the recovery and not during the effort, and that his willingness to suffer had been, for four years, the thing standing between him and the result he wanted.",
+  },
 ];
 
 // band pool sizes used to convert per-band coverage into a headline number.
@@ -1211,6 +1242,14 @@ var LEXIS_FREQ_SUPP = (function () {
     "embarrass c|embarrassed c|unsettling m|fluency m|articulate m|constrain m|fabricate m|newcomer m|" +
     "internalise l|unglamorous r|ghostwrite r|apologise c|profusely l|incriminate l|immaculate l|hedge m|" +
     "drifting c|womenswear r|menswear r|" +
+    // v1.67.0 passages (returns / benchmark / canal / taper) — ordinary words the
+    // web corpus skips, plus the genuinely specialist ones, banded by hand so no
+    // token in a passage falls into 超纲. See the note on LEXIS_FREQ_SUPP above.
+    "trolley m|trolleys m|refurbish l|scrap m|laminate l|laminated l|conceal m|conceals m|salvage l|salvageable l|" +
+    "harness m|posture m|impeccable l|impeccably l|abrupt m|abruptly m|absurd m|absurdly m|slogan m|" +
+    "strenuous l|sluggish l|fraudulent l|clerical l|dismantle m|dismantling m|" +
+    "wheelwright r|innkeeper l|baptism l|baptisms l|haulier r|wharf r|silt r|silted r|dredge r|dredging r|" +
+    "resell l|resellable r|liquidator l|knitwear l|hairnet r|inbound m|headwind l|tonnage l|surveyor m|legible l|" +
     // high-utility general vocabulary (spoken + literary) missing from the web list
     "ache c|admire c|advise c|afford c|alarm c|amaze c|amuse c|anger c|announce c|annoy c|anxious c|apologize c|" +
     "appetite m|applaud m|apron l|argue c|arrange c|arrest c|ashamed m|assume c|astonish m|attach c|attempt c|" +
@@ -2127,6 +2166,113 @@ function lexisBreakdownUseful(bd) {
     (bd.parts || []).some(function (p) { return p.definition || p.cn; }));
 }
 
+// ---- Phrase & idiom check: sampling -------------------------------------
+// The old version was a plain even-step walk over each pool, so EVERY round
+// asked the same 50 chunks — redoing the check measured nothing new, which is
+// the whole point of redoing it. Now the walk runs over what you have NOT been
+// asked yet: the even spread across the frequency range is preserved (the step
+// is recomputed over what is left), each round is genuinely fresh, and when a
+// pool runs out it starts over rather than returning nothing.
+// `pos` stays the item's index in the FULL pool, because that is what the
+// frontier means — how far into the pool Discover may skip.
+function lexisChunkSample(judged, counts) {
+  var done = {};
+  (judged || []).forEach(function (t) { done[String(t).toLowerCase()] = 1; });
+  var n = counts || { phrase: 24, pv: 14, idiom: 12 };
+  var left = 0;
+  var walk = function (src, want) {                 // even step across what's given
+    var out = [];
+    if (!src.length || want <= 0) return out;
+    var step = Math.max(1, Math.floor(src.length / want));
+    for (var i = 0; i < src.length && out.length < want; i += step) out.push(src[i]);
+    return out;
+  };
+  var pools = [
+    { src: "phrase", want: n.phrase, arr: (typeof LEXIS_PHRASE_LIST !== "undefined" ? LEXIS_PHRASE_LIST : []).map(function (x, i) {
+      return { term: x.term, src: "phrase", pos: i, ex: x.example || "" }; }) },
+    { src: "pv", want: n.pv, arr: (typeof LEXIS_PHAVE_LIST !== "undefined" ? LEXIS_PHAVE_LIST : []).map(function (x, i) {
+      return { term: x.term, src: "pv", pos: i, ex: (x.senses && x.senses[0] && x.senses[0].example) || "" }; }) },
+    { src: "idiom", want: n.idiom, arr: Object.keys(typeof LEXIS_IDIOM_SCENE !== "undefined" ? LEXIS_IDIOM_SCENE : {}).map(function (t, i) {
+      return { term: t, src: "idiom", pos: i, ex: "" }; }) },
+  ];
+  var total = 0;
+  pools.forEach(function (p) {
+    p.fresh = p.arr.filter(function (x) { return !done[x.term.toLowerCase()]; });
+    p.take = Math.min(p.want, p.fresh.length);
+    left += p.fresh.length;
+    total += p.want;
+  });
+  // The idiom pool is only ~49 deep, so at 12 a round it is spent after four
+  // rounds while the phrase pool (498) still has hundreds left. Hand the slots a
+  // dry pool can't fill to the pools that CAN — repeating a question you have
+  // already answered measures nothing, and a round of 50 fresh chunks is the
+  // whole reason to take the check again.
+  var deficit = total - pools.reduce(function (s, p) { return s + p.take; }, 0);
+  for (var pass = 0; pass < 3 && deficit > 0; pass++) {
+    pools.forEach(function (p) {
+      if (deficit <= 0) return;
+      var give = Math.min(p.fresh.length - p.take, deficit);
+      if (give > 0) { p.take += give; deficit -= give; }
+    });
+  }
+  var out = [];
+  pools.forEach(function (p) { out = out.concat(walk(p.fresh, p.take)); });
+  // only when EVERY pool is spent do we revisit, and then from what's left over
+  // rather than restarting at the top of the list
+  if (deficit > 0) {
+    var used = {};
+    out.forEach(function (x) { used[x.term.toLowerCase()] = 1; });
+    pools.forEach(function (p) {
+      if (deficit <= 0) return;
+      var rest = p.arr.filter(function (x) { return !used[x.term.toLowerCase()]; });
+      walk(rest, Math.min(p.want, deficit)).forEach(function (x) {
+        out.push(x); used[x.term.toLowerCase()] = 1; deficit--;
+      });
+    });
+  }
+  out.freshLeft = left;                       // 0 → every pool has been through once
+  return out;
+}
+// Fold one round's answers into the running totals. Identical on both surfaces:
+// a re-check has to ADD evidence, not replace it, or the second round is worth
+// less than the first.
+function lexisChunkTally(prev, items, markedSet) {
+  prev = prev || {};
+  var bySrc = {};
+  ["phrase", "pv", "idiom"].forEach(function (src) {
+    var g = items.filter(function (x) { return x.src === src; });
+    if (!g.length && !(prev.bySrc && prev.bySrc[src])) return;
+    var bad = g.filter(function (x) { return markedSet.has(x.term); });
+    var pb = (prev.bySrc && prev.bySrc[src]) || {};
+    var seen = (pb.seen || 0) + g.length;
+    var unknown = (pb.unknown || 0) + bad.length;
+    var rf = bad.length ? Math.min.apply(null, bad.map(function (x) { return x.pos; })) : null;
+    var frontier;
+    if (rf === null) frontier = (pb.frontier === undefined || pb.frontier === null)
+      ? (g.length ? g[g.length - 1].pos : 0) : pb.frontier;
+    else frontier = (pb.frontier === undefined || pb.frontier === null) ? rf : Math.min(pb.frontier, rf);
+    bySrc[src] = { seen: seen, unknown: unknown, frontier: frontier, pct: seen ? 1 - unknown / seen : 1 };
+  });
+  var uniq = function (list) {
+    var o = [], s = {};
+    list.forEach(function (t) { var k = String(t).toLowerCase(); if (t && !s[k]) { s[k] = 1; o.push(t); } });
+    return o;
+  };
+  var asked = {};
+  items.forEach(function (x) { asked[x.term.toLowerCase()] = 1; });
+  // a chunk you were asked again and did NOT tap this time is no longer unknown
+  var keptUnknown = (prev.unknown || []).filter(function (t) {
+    return !asked[String(t).toLowerCase()] || markedSet.has(t);
+  });
+  return {
+    at: prev.at || 0,
+    rounds: (prev.rounds || 0) + 1,
+    seen: uniq((prev.seen || []).concat(items.map(function (x) { return x.term; }))),
+    unknown: uniq(keptUnknown.concat(Array.from(markedSet))),
+    bySrc: bySrc,
+  };
+}
+
 // what each Discover tab actually is, in one line
 var LEXIS_TAB_WHAT = {
   words: "Single words.",
@@ -2326,4 +2472,4 @@ function lexisMergeNotebooks(local, remote, tombs) {
   return { words: d.words, changed: changed, dupes: d.dupes };
 }
 
-if (typeof window !== "undefined") { window.LEXIS_SEED = LEXIS_SEED; window.LEXIS_SEED_FLAT = LEXIS_SEED_FLAT; window.LEXIS_FREQ = LEXIS_FREQ; window.LEXIS_COMMON = LEXIS_COMMON; window.LEXIS_MORPH = LEXIS_MORPH; window.lexisAnalyzeMorph = lexisAnalyzeMorph; window.lexisWordDomain = lexisWordDomain; window.LEXIS_SCENE_CN = LEXIS_SCENE_CN; window.lexisIdiomScene = lexisIdiomScene; window.LEXIS_PHRASE_SEED = LEXIS_PHRASE_SEED; window.LEXIS_PHRASE_SEED_FLAT = LEXIS_PHRASE_SEED_FLAT; window.lexisPhraseScene = lexisPhraseScene; window.lexisSingularize = lexisSingularize; window.LEXIS_PASSAGES = LEXIS_PASSAGES; window.LEXIS_BAND_SIZE = LEXIS_BAND_SIZE; window.LEXIS_BAND_SEQ = LEXIS_BAND_SEQ; window.LEXIS_BAND_LABEL = LEXIS_BAND_LABEL; window.lexisWordBand = lexisWordBand; window.lexisPassageTokens = lexisPassageTokens; window.lexisEstimateFromReading = lexisEstimateFromReading; window.LEXIS_PROPER_NOUNS = LEXIS_PROPER_NOUNS; window.LEXIS_JUNK_WORDS = LEXIS_JUNK_WORDS; window.lexisIsNoiseWord = lexisIsNoiseWord; window.LEXIS_ABBREV = LEXIS_ABBREV; window.lexisStemCandidates = lexisStemCandidates; window.LEXIS_PHRASE_LIST = LEXIS_PHRASE_LIST; window.LEXIS_PHRASE_EXAMPLE = LEXIS_PHRASE_EXAMPLE; window.LEXIS_PTYPE_CN = LEXIS_PTYPE_CN; window.LEXIS_KIND_CN = LEXIS_KIND_CN; window.LEXIS_PTYPE_RULE = LEXIS_PTYPE_RULE; window.lexisKindOf = lexisKindOf; window.lexisDataScore = lexisDataScore; window.lexisMergeData = lexisMergeData; window.lexisMergeWordPair = lexisMergeWordPair; window.lexisMergeNotebooks = lexisMergeNotebooks; window.lexisDedupeWords = lexisDedupeWords; window.lexisTombKeys = lexisTombKeys; window.lexisTombAt = lexisTombAt; window.lexisPhraseType = lexisPhraseType; window.LEXIS_PHAVE_LIST = LEXIS_PHAVE_LIST; window.LEXIS_PHAVE_MAP = LEXIS_PHAVE_MAP; window.LEXIS_DRILL_CN = LEXIS_DRILL_CN; window.LEXIS_DRILL_EN = LEXIS_DRILL_EN; window.lexisHashText = lexisHashText; window.lexisSentenceQuality = lexisSentenceQuality; window.lexisClozeSplit = lexisClozeSplit; window.lexisWordSentences = lexisWordSentences; window.lexisSenseFor = lexisSenseFor; window.lexisProduced = lexisProduced; window.lexisProduceTarget = lexisProduceTarget; window.lexisBuildDrill = lexisBuildDrill; window.lexisMarkDrill = lexisMarkDrill; window.LEXIS_FREQ_SUPP = LEXIS_FREQ_SUPP; window.LEXIS_PV_ALL = LEXIS_PV_ALL; window.LEXIS_EXPR_ALL = LEXIS_EXPR_ALL; window.LEXIS_IDIOM_SET = LEXIS_IDIOM_SET; window.LEXIS_TAB_WHAT = LEXIS_TAB_WHAT; window.lexisChunksWith = lexisChunksWith; window.lexisCleanChunk = lexisCleanChunk; window.LEXIS_COMPOUND_TAIL = LEXIS_COMPOUND_TAIL; window.lexisCompoundGloss = lexisCompoundGloss; window.lexisBreakdownParts = lexisBreakdownParts; window.lexisChunksInside = lexisChunksInside; window.lexisTermBreakdown = lexisTermBreakdown; window.lexisBreakdownUseful = lexisBreakdownUseful; }
+if (typeof window !== "undefined") { window.LEXIS_SEED = LEXIS_SEED; window.LEXIS_SEED_FLAT = LEXIS_SEED_FLAT; window.LEXIS_FREQ = LEXIS_FREQ; window.LEXIS_COMMON = LEXIS_COMMON; window.LEXIS_MORPH = LEXIS_MORPH; window.lexisAnalyzeMorph = lexisAnalyzeMorph; window.lexisWordDomain = lexisWordDomain; window.LEXIS_SCENE_CN = LEXIS_SCENE_CN; window.lexisIdiomScene = lexisIdiomScene; window.LEXIS_PHRASE_SEED = LEXIS_PHRASE_SEED; window.LEXIS_PHRASE_SEED_FLAT = LEXIS_PHRASE_SEED_FLAT; window.lexisPhraseScene = lexisPhraseScene; window.lexisSingularize = lexisSingularize; window.LEXIS_PASSAGES = LEXIS_PASSAGES; window.LEXIS_BAND_SIZE = LEXIS_BAND_SIZE; window.LEXIS_BAND_SEQ = LEXIS_BAND_SEQ; window.LEXIS_BAND_LABEL = LEXIS_BAND_LABEL; window.lexisWordBand = lexisWordBand; window.lexisPassageTokens = lexisPassageTokens; window.lexisEstimateFromReading = lexisEstimateFromReading; window.LEXIS_PROPER_NOUNS = LEXIS_PROPER_NOUNS; window.LEXIS_JUNK_WORDS = LEXIS_JUNK_WORDS; window.lexisIsNoiseWord = lexisIsNoiseWord; window.LEXIS_ABBREV = LEXIS_ABBREV; window.lexisStemCandidates = lexisStemCandidates; window.LEXIS_PHRASE_LIST = LEXIS_PHRASE_LIST; window.LEXIS_PHRASE_EXAMPLE = LEXIS_PHRASE_EXAMPLE; window.LEXIS_PTYPE_CN = LEXIS_PTYPE_CN; window.LEXIS_KIND_CN = LEXIS_KIND_CN; window.LEXIS_PTYPE_RULE = LEXIS_PTYPE_RULE; window.lexisKindOf = lexisKindOf; window.lexisDataScore = lexisDataScore; window.lexisMergeData = lexisMergeData; window.lexisMergeWordPair = lexisMergeWordPair; window.lexisMergeNotebooks = lexisMergeNotebooks; window.lexisDedupeWords = lexisDedupeWords; window.lexisTombKeys = lexisTombKeys; window.lexisTombAt = lexisTombAt; window.lexisPhraseType = lexisPhraseType; window.LEXIS_PHAVE_LIST = LEXIS_PHAVE_LIST; window.LEXIS_PHAVE_MAP = LEXIS_PHAVE_MAP; window.LEXIS_DRILL_CN = LEXIS_DRILL_CN; window.LEXIS_DRILL_EN = LEXIS_DRILL_EN; window.lexisHashText = lexisHashText; window.lexisSentenceQuality = lexisSentenceQuality; window.lexisClozeSplit = lexisClozeSplit; window.lexisWordSentences = lexisWordSentences; window.lexisSenseFor = lexisSenseFor; window.lexisProduced = lexisProduced; window.lexisProduceTarget = lexisProduceTarget; window.lexisBuildDrill = lexisBuildDrill; window.lexisMarkDrill = lexisMarkDrill; window.LEXIS_FREQ_SUPP = LEXIS_FREQ_SUPP; window.LEXIS_PV_ALL = LEXIS_PV_ALL; window.LEXIS_EXPR_ALL = LEXIS_EXPR_ALL; window.LEXIS_IDIOM_SET = LEXIS_IDIOM_SET; window.LEXIS_TAB_WHAT = LEXIS_TAB_WHAT; window.lexisChunksWith = lexisChunksWith; window.lexisCleanChunk = lexisCleanChunk; window.LEXIS_COMPOUND_TAIL = LEXIS_COMPOUND_TAIL; window.lexisCompoundGloss = lexisCompoundGloss; window.lexisBreakdownParts = lexisBreakdownParts; window.lexisChunksInside = lexisChunksInside; window.lexisTermBreakdown = lexisTermBreakdown; window.lexisBreakdownUseful = lexisBreakdownUseful; window.lexisChunkSample = lexisChunkSample; window.lexisChunkTally = lexisChunkTally; }
