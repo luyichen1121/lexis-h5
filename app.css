@@ -97,8 +97,12 @@ button.btn:active{transform:translateY(1px)}
 .progress > i{display:block;height:100%;background:var(--sage)}
 
 /* discover study */
-.study{display:flex;align-items:center;gap:10px;padding:11px 4px;border-bottom:1px solid var(--line)}
-.study .term{font-family:Georgia,serif;font-size:17px;white-space:nowrap}
+.study{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:11px 4px;border-bottom:1px solid var(--line)}
+/* The row holds .study-ex / .pv-sense as flex-basis:100% children, so it MUST
+   wrap — without it (短语动词 has no .has-ex) every sense sat on one line and
+   the whole page scrolled sideways. And a multi-word headword may wrap at its
+   spaces; nowrap made one long phrasal verb widen the viewport. */
+.study .term{font-family:Georgia,serif;font-size:17px;min-width:0;word-break:keep-all;overflow-wrap:break-word}
 .study .g{font-size:12px;color:var(--ink2)}
 .study .act{margin-left:auto;display:flex;gap:6px}
 .study .act button{font-size:12px;padding:6px 10px}
@@ -265,3 +269,93 @@ body.looking .nb-only{display:none}
 .rev-home{text-align:center;padding:26px 18px}
 .rev-streak{font-size:14px;color:var(--clay);margin-bottom:10px}
 .rev-home .meter{max-width:280px;margin:14px auto 6px}
+
+
+/* ---- v1.56.0 ---------------------------------------------------------- */
+/* fix the causes, don't hide them: every row that can hold a long chunk gets a
+   real min-width:0 + a place to break, instead of a blanket overflow:hidden */
+.study-ex,.pv-sense,.item,.card{min-width:0;overflow-wrap:break-word}
+.item > div{min-width:0}
+
+/* select-to-look-up chip */
+.selchip{position:fixed;z-index:60;transform:translate(-50%,-100%);display:none;
+  align-items:center;gap:6px;padding:4px;background:var(--ink);color:var(--paper);
+  border-radius:11px;font-size:13px;box-shadow:var(--shadow);white-space:nowrap}
+.selchip.show{display:inline-flex}
+.selchip-t{font-family:Georgia,serif;font-style:italic;padding:3px 8px;max-width:150px;
+  overflow:hidden;text-overflow:ellipsis;background:rgba(255,255,255,.1);border-radius:8px}
+.selchip button{border:0;background:transparent;color:var(--paper);font:inherit;
+  font-weight:600;padding:6px 10px;border-radius:8px;cursor:pointer}
+
+/* chunks marked unknown while reading a passage */
+.ph-lbl{font-size:11px;letter-spacing:.06em;color:var(--ink2);margin:12px 0 6px}
+.ph-chip{background:rgba(192,96,62,.12);color:var(--clay)}
+.ph-x{border:0;background:transparent;color:inherit;font-size:11px;cursor:pointer;padding:0}
+
+/* ---- v1.57.0 · multi-drill review ------------------------------------- */
+.rv-mode{display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:10px}
+.rv-mode-t{font-size:11px;color:var(--ink2);background:var(--paper2);border-radius:20px;padding:3px 10px}
+.rv-prod{font-size:11px;color:var(--clay);background:rgba(192,96,62,.12);border-radius:20px;padding:3px 10px}
+.rv-prod.ok{color:var(--sage);background:rgba(111,156,107,.14)}
+.rv-origin{font-size:12.5px;color:var(--ink2);margin-bottom:12px;line-height:1.6}
+.rv-origin b{color:var(--ink)}
+.rv-sent{font-family:Georgia,serif;font-size:19px;line-height:2.1;text-align:left}
+.rv-sent mark{background:rgba(192,96,62,.13);color:var(--ink);border-radius:3px;padding:0 2px}
+.cz-in{font-family:Georgia,serif;font-size:18px;color:var(--clay);border:0;
+  border-bottom:2px solid var(--clay);background:transparent;outline:none;padding:0 4px;margin:0 3px;
+  text-align:center;min-width:5ch}
+.cz-gap{display:inline-block;min-width:4ch;border-bottom:2px solid var(--clay);color:var(--clay);text-align:center}
+.rv-zh{font-size:16px;line-height:1.8;margin-bottom:16px}
+.rv-opts{display:grid;gap:8px;margin-top:18px}
+.rv-opt{border:1px solid var(--line);background:var(--card);border-radius:11px;padding:12px 14px;
+  font:inherit;font-size:15px;color:var(--ink);text-align:left;cursor:pointer;width:100%}
+.rv-src{font-size:11px;color:var(--ink2);margin-top:8px}
+
+/* how a term got its label — automatic tagging must stay inspectable */
+.kind-rule{margin:2px 0 12px}
+.kind-rule > summary{list-style:none;cursor:pointer;font-size:12px;color:var(--clay);padding:4px 0}
+.kind-rule > summary::-webkit-details-marker{display:none}
+.kr-body{background:var(--paper2);border-radius:12px;padding:12px 14px;margin-top:6px}
+.kr-lead,.kr-l1{font-size:12.5px;color:var(--ink2);margin:0 0 8px;line-height:1.7}
+.kr-list{margin:0;padding-left:18px;font-size:12.5px;color:var(--ink2);line-height:1.9}
+.kr-eg{display:block;font-family:Georgia,serif;color:var(--ink2);opacity:.75;font-size:12px}
+/* which dictionary the senses came from — makes "one source" verifiable */
+.sense-src{float:right;font-size:10.5px;font-weight:500;letter-spacing:0;text-transform:none;
+  color:var(--ink2);background:var(--paper2);border-radius:20px;padding:2px 9px}
+
+/* definition came from a shorter form of the phrase — see sensesOfHTML in app.js */
+.senses-of{font-size:12px;line-height:1.5;color:var(--ink2);background:var(--paper2);
+  border-radius:8px;padding:7px 10px;margin:2px 0 10px}
+.senses-of b{color:var(--ink);font-weight:600}
+
+/* Origin — why people say this */
+.origin-card{font-size:13.5px;line-height:1.65;color:var(--ink);background:var(--paper2);
+  border-left:2px solid var(--clay);border-radius:0 8px 8px 0;padding:11px 13px}
+.origin-card .org-lead{font-size:12px;color:var(--ink2);margin-bottom:3px}
+.origin-card .org-lead b{color:var(--ink)}
+.origin-card .org-src{font-size:11px;color:var(--ink2);margin-top:6px}
+
+/* Phrasal verbs / Fixed expressions using this word */
+.chk-row{padding:9px 0;border-bottom:1px solid var(--line)}
+.chk-row:last-child{border-bottom:0}
+.chk-h{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.chk-w{border:0;background:none;padding:0;cursor:pointer;font-family:Georgia,"Times New Roman",serif;font-size:15px;color:var(--ink)}
+.chk-tag{font-size:10.5px;padding:1px 7px;border-radius:20px;background:var(--paper2);color:var(--ink2)}
+.chk-tag.chk-pv{background:#eaf0e8;color:#4f7a4b}
+.chk-tag.chk-expr{background:#f6ece4;color:#a2512f}
+.chk-add{margin-left:auto;border:1px solid var(--line);background:none;cursor:pointer;font-size:12px;
+  color:var(--clay);border-radius:20px;padding:2px 11px}
+.chk-add.saved{border-color:transparent;color:var(--ink2)}
+.chk-d{font-size:12.5px;color:var(--ink2);margin-top:3px}
+.chk-e{font-size:13px;color:var(--ink);opacity:.8;margin-top:3px}
+
+/* Breakdown — composed content for a term no dictionary lists */
+.bd-gloss{font-size:16px;line-height:1.55;padding:10px 12px;border-left:2px solid var(--sage,#6f9c6b);
+  background:var(--paper2);border-radius:0 8px 8px 0;margin-bottom:10px}
+.bd-gloss .bd-cn{font-family:inherit;font-size:13.5px;color:var(--ink2);margin-top:3px}
+.bd-pat{font-size:11.5px;color:var(--ink2);margin-top:5px;line-height:1.5}
+.bd-part{padding:6px 0 6px 10px;border-left:1px solid var(--line)}
+.bd-w{border:0;background:none;padding:0;cursor:pointer;font-family:Georgia,"Times New Roman",serif;
+  font-size:15px;color:var(--ink)}
+.bd-d{font-size:12.5px;color:var(--ink2);margin-top:2px;line-height:1.55}
+.bd-inside{margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}

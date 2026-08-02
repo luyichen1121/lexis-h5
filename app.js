@@ -18,8 +18,8 @@
   const PROPER_NOUNS = new Set("aaron adams alexander alice allen amanda andrea andrew angela ann anna anthony arthur ashley austin bailey barbara benjamin bennett betty beverly brandon brian bryant campbell carl carter catherine charles charlotte christina christine christopher clark coleman collins cruz daniel david davis deborah dennis diana diane donald donna douglas edward edwards elizabeth emily emma eric evans garcia gary george gerald gregory harold harris hayes henderson henry howard hughes jackson jacob james janet jason jeffrey jennifer jeremy jerry jesse jessica joan john johnson jonathan jones jose joseph joshua joyce judy julia julie justin karen keith kelly kenneth kevin kyle larry laura lauren lawrence lee lewis linda lisa madison margaret maria marie marilyn martha martin mary matthew melissa michael michelle mitchell moore morris murphy myers nancy nathan nelson nicholas nicole pamela parker patricia patrick paul perry peter peterson phillips powell rachel raymond rebecca richard richardson robert roberts robinson roger rogers ronald ross russell ryan samuel sandra sara sarah scott sean sharon stephanie stephen steven stewart susan thomas thompson timothy tyler victoria walter washington watson william williams wilson adidas adobe amazon bmw canon cisco dell disney ebay epson google hitachi honda ibm intel kodak mastercard mcdonald microsoft mitsubishi morgan nike nikon nokia panasonic paypal philip philips samsung siemens sony tiffany toyota verizon wordpress yahoo alabama alaska albuquerque america arizona arlington atlanta australia austria baltimore bangladesh beijing belgium berlin birmingham boston brazil california canada carolina chicago china cincinnati cleveland colorado connecticut dakota dallas delaware denmark denver detroit dublin edinburgh egypt england finland florida france georgia germany glasgow greece hampshire hawaii houston idaho illinois india indiana indonesia iowa ireland italy japan kansas kentucky kenya korea liverpool london louisiana madrid maine malaysia manchester maryland massachusetts melbourne memphis mesa mexico miami michigan milwaukee minneapolis minnesota mississippi missouri montana montreal morocco moscow nashville nebraska nevada nigeria norway oakland ohio oklahoma omaha oregon orlando ottawa pakistan paris pennsylvania philadelphia philippines phoenix pittsburgh poland portland portugal rome russia sacramento scotland seattle shanghai singapore spain sweden switzerland sydney tampa tennessee texas thailand tokyo toronto tucson tulsa utah vancouver vegas vermont vietnam virginia wales wichita wisconsin wyoming york".split(" "));
 
   // ---- storage ----------------------------------------------------------
-  const K = { words: "lexis_words", settings: "lexis_settings", assess: "lexis_assess" };
-  const DEFAULT_SETTINGS = { chinese: true, dailyNewLimit: 15, dailyGoal: 20, showExamples: true, autoEnrich: true, gistToken: "", gistId: "" };
+  const K = { words: "lexis_words", settings: "lexis_settings", assess: "lexis_assess", deleted: "lexis_deleted" };
+  const DEFAULT_SETTINGS = { chinese: true, dailyNewLimit: 15, dailyGoal: 20, showExamples: true, autoEnrich: true, reviewDrill: "auto", glossLang: "both", gistToken: "", gistId: "" };
   function load(k, fb) { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? fb : v; } catch (e) { return fb; } }
   function save(k, v) { localStorage.setItem(k, JSON.stringify(v)); }
   // Strip punctuation a selection dragged in ("word," / “word” / (word).),
@@ -42,6 +42,35 @@
 
   let _suppressAutoSync = false; // true while syncNow writes merged data, so we don't loop
   const setWords = (w) => { save(K.words, w); if (!_suppressAutoSync) scheduleAutoSync(); };
+  let repairedDupes = 0;
+  // Repair: the pre-1.59 word-keyed merge could leave two entries sharing one id
+  // (a rename that synced under two names). The UI deletes by id, so such a pair
+  // made deleting one wipe both. Runs once at boot.
+  // Bumped whenever the LOOK-UP itself changes (not the stored shape). The sweep
+  // gives up on a word after SWEEP_MAX_TRIES so a term with genuinely no entry
+  // isn't re-fetched forever — but that budget was spent under the OLD look-up,
+  // so a pipeline change has to hand it back. Without this, the entries the fix
+  // was written for ("quibble about", "crouch down") are precisely the ones that
+  // never retry. LOOKUP_VER 2 = the shortened-headword ladder in phraseVariants();
+  // 3 = the breakdown, which gives the un-listable terms content for the first time.
+  const LOOKUP_VER = 3;
+  function repairWords() {
+    let list = load(K.words, []);
+    let changed = false;
+    if (Number(localStorage.getItem("lexis_lookup_ver") || 0) < LOOKUP_VER) {
+      list.forEach((w) => {
+        const d = w.data;
+        if (d && d.fixTries && !(d.meanings || []).length) { d.fixTries = 0; changed = true; }
+      });
+      localStorage.setItem("lexis_lookup_ver", String(LOOKUP_VER));
+    }
+    if (window.lexisDedupeWords) {
+      const d = window.lexisDedupeWords(list);
+      if (d.dupes) { repairedDupes = d.dupes; list = d.words; changed = true; }
+    }
+    if (changed) { _suppressAutoSync = true; save(K.words, list); _suppressAutoSync = false; }
+  }
+
   // One-time sweep: clean stray punctuation off saved headwords, folding any
   // collision into the entry that already owns the cleaned term.
   function getWords() {
@@ -70,6 +99,33 @@
     if (changed) setWords(out);
     return out;
   }
+  // ---- deletion tombstones -------------------------------------------------
+  // Sync merges the UNION of both devices by "newer updatedAt wins", so a delete
+  // is invisible to it and the other device hands the word straight back. A
+  // tombstone records WHEN you deleted it; the merge then drops any copy older
+  // than that. Saving the word again clears its tombstone.
+  const TOMB_TTL = 120 * 864e5;
+  // Keyed by BOTH the entry id and its headword (see lexisTombKeys) — a delete
+  // must stick even if the other device knows the entry by an older name.
+  const tombKeys = (w) => (window.lexisTombKeys ? window.lexisTombKeys(w) : [norm(w && w.word !== undefined ? w.word : w)]);
+  const getTombs = () => load(K.deleted, {}) || {};
+  function tombstone(list) {
+    const t = getTombs(), ts = now();
+    (Array.isArray(list) ? list : [list]).forEach((w) => tombKeys(w).forEach((k) => { if (k) t[k] = ts; }));
+    save(K.deleted, t);
+    if (!_suppressAutoSync) scheduleAutoSync();
+  }
+  function untombstone(list) {
+    const t = getTombs(); let hit = false;
+    (Array.isArray(list) ? list : [list]).forEach((w) => tombKeys(w).forEach((k) => { if (k && t[k]) { delete t[k]; hit = true; } }));
+    if (hit) save(K.deleted, t);
+  }
+  function pruneTombs(t) {
+    const cutoff = now() - TOMB_TTL; let hit = false;
+    Object.keys(t).forEach((k) => { if (!t[k] || t[k] < cutoff) { delete t[k]; hit = true; } });
+    return hit;
+  }
+
   const getSettings = () => Object.assign({}, DEFAULT_SETTINGS, load(K.settings, {}));
   const setSettings = (s) => save(K.settings, s);
   const getAssess = () => load(K.assess, { known: [], level: null, estVocab: 0 });
@@ -81,12 +137,32 @@
     if (!keepStamp && !_suppressAutoSync) scheduleAutoSync();
   };
 
+  // English-only study: keep the Chinese in storage (so the switch is instant and
+  // reversible) but show none of it. Filtering at the render boundary is the only
+  // version of this that can't be half-done.
+  const enOnly = () => getSettings().glossLang === "en";
+  // English-only makes every Chinese fetch dead weight — the gloss and the
+  // per-example translation are requested, paid for, then hidden. Same switch
+  // the extension uses (settingsWantsCn in background.js).
+  const wantCnNow = () => { const s2 = getSettings(); return s2.chinese !== false && s2.glossLang !== "en"; };
+  function stripCn(o) {
+    if (!o || typeof o !== "object") return o;
+    if (Array.isArray(o)) return o.map(stripCn);
+    const out = {};
+    for (const k in o) {
+      if (k === "cn" || k === "translation" || k === "exampleCn" || k === "sentenceCn" || k === "contextMeaning") out[k] = "";
+      else out[k] = (o[k] && typeof o[k] === "object") ? stripCn(o[k]) : o[k];
+    }
+    return out;
+  }
+  const asShown = (o) => (enOnly() ? stripCn(o) : o);
+
   // A toast that can carry an Undo. Every destructive action goes through this
   // instead of a confirm() dialog — confirming is friction on the 99% of taps that
   // were intentional, and gives you nothing on the 1% that weren't.
   function toast(msg, undo) {
     let t = $(".toast"); if (!t) { t = el(`<div class="toast"></div>`); document.body.appendChild(t); }
-    t.innerHTML = msg + (undo ? ` <button class="toast-undo">撤销</button>` : "");
+    t.innerHTML = msg + (undo ? ` <button class="toast-undo">Undo</button>` : "");
     t.classList.toggle("actionable", !!undo);
     t.classList.add("show");
     clearTimeout(toast._t);
@@ -133,13 +209,178 @@
   }
 
   const stripTags = (s) => String(s || "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+  const DICT_NAME = { wiktionary: "Wiktionary", dictionaryapi: "dictionaryapi.dev", datamuse: "Datamuse",
+    thefreedictionary: "The Free Dictionary" };
   const POS_SHORT = { noun: "n.", verb: "v.", adjective: "adj.", adverb: "adv.", pronoun: "pron.", preposition: "prep.",
     conjunction: "conj.", interjection: "interj.", determiner: "det.", numeral: "num.", phrase: "phr.",
-    "prepositional phrase": "phr.", "verb phrase": "phr.", "noun phrase": "phr.", proverb: "谚语", idiom: "习语" };
+    "prepositional phrase": "phr.", "verb phrase": "phr.", "noun phrase": "phr.", proverb: "prov.", idiom: "idiom" };
   const posShort = (p) => POS_SHORT[String(p || "").toLowerCase()] || String(p || "").toLowerCase().slice(0, 12);
 
   // Wiktionary (free, CORS-open). The only source here that covers PHRASES and
   // IDIOMS, and a second supply of examples for plain words.
+  // Dictionaries file a phrase under its GENERIC form: you meet "get your head
+  // on straight", Wiktionary has "get one's head on straight". Without this the
+  // look-up just fails and a perfectly real phrase looks 查不出来. Mirrors
+  // phraseVariants()/tryVariants() in the extension's background.js.
+  const PH_POSS = /^(my|your|his|her|its|our|their)$/i;
+  const PH_OBJ = /^(me|you|him|her|us|them)$/i;
+  const PH_PAST = { lost: "lose", took: "take", made: "make", got: "get", gave: "give", went: "go",
+    came: "come", kept: "keep", held: "hold", broke: "break", caught: "catch", fell: "fall",
+    felt: "feel", found: "find", left: "leave", paid: "pay", ran: "run", said: "say", saw: "see",
+    sold: "sell", sent: "send", spent: "spend", stood: "stand", threw: "throw", won: "win", wore: "wear" };
+  function baseVerbForm(x) {
+    const l = String(x || "").toLowerCase();
+    if (PH_PAST[l]) return PH_PAST[l];
+    if (/^(is|are|was|were|been|being)$/.test(l)) return "be";
+    if (/^(has|had)$/.test(l)) return "have";
+    if (/ied$/.test(l)) return l.slice(0, -3) + "y";
+    if (/[^aeiou]ed$/.test(l) && l.length > 4) return l.slice(0, -2);
+    if (/ing$/.test(l) && l.length > 5) return l.slice(0, -3);
+    if (/[^s]s$/.test(l) && l.length > 3) return l.slice(0, -1);
+    return null;
+  }
+  function phraseVariants(term) {
+    const t = String(term || "").toLowerCase().replace(/\s+/g, " ").trim();
+    if (!t || !/\s/.test(t)) return [];
+    const w = t.split(" ");
+    const out = [];
+    const add = (x) => { const v = x.replace(/\s+/g, " ").trim(); if (v && v !== t && out.indexOf(v) < 0) out.push(v); };
+    add(w.map((x) => (PH_POSS.test(x) ? "one's" : x)).join(" "));
+    add(w.map((x, i) => (PH_OBJ.test(x) && i > 0 ? "sb" : x)).join(" "));
+    add(w.map((x) => (PH_POSS.test(x) ? "somebody's" : x)).join(" "));
+    const base = baseVerbForm(w[0]);
+    if (base) {
+      add([base].concat(w.slice(1)).join(" "));
+      add([base].concat(w.slice(1).map((x) => (PH_POSS.test(x) ? "one's" : x))).join(" "));
+    }
+    if (/^(a|an|the)$/.test(w[0])) add(w.slice(1).join(" "));
+    // Shortening ladder — mirrors background.js phraseVariants(). Everything above
+    // rewrites the phrase into another form of the SAME unit, which is not enough:
+    // what you save is a surface fragment carrying material the headword lacks —
+    // "get carried away" → "carried away", "tip the scales to" → "tip the scales",
+    // "quibble about" → "quibble", "crouch down" → "crouch". Only reached after the
+    // verbatim phrase has already missed, so a real phrasal verb is never harmed.
+    const light = PH_LIGHT.test(w[0]) && w.length > 2 ? w.slice(1) : null;
+    if (light) add(light.join(" "));
+    const trimTail = (arr) => { let a = arr.slice(); while (a.length > 1 && PH_TAIL.test(a[a.length - 1])) a = a.slice(0, -1); return a; };
+    const tailed = trimTail(w);
+    if (tailed.length !== w.length) add(tailed.join(" "));
+    if (light) add(trimTail(light).join(" "));
+    if (w.length <= 4) {
+      const head = (light || w).filter((x) => !PH_SKIP.test(x))[0];
+      if (head && /^[a-z][a-z'-]*$/.test(head)) add(head);
+    }
+    return out.slice(0, 8);
+  }
+  const PH_TAIL = /^(about|of|to|for|with|on|in|at|from|into|onto|over|by|as|up|down|out|off|away|back|through|around|against|that|it|sth|sb|somebody|someone|something|one's|his|her|their|your|my|its|the|a|an)$/;
+  const PH_LIGHT = /^(get|gets|got|gotten|getting|be|is|am|are|was|were|been|being|become|becomes|became|becoming|feel|feels|felt|feeling|seem|seems|seemed)$/;
+  const PH_SKIP = /^(a|an|the|to|of|in|on|at|by|for|with|from|into|onto|over|about|as|and|or|but|not|no|it|its|this|that|these|those|my|your|his|her|their|our|one's|be|is|am|are|was|were|been|being|have|has|had|do|does|did|will|would|can|could|shall|should|may|might|must|get|got|make|made|take|took)$/;
+  // try the term, then its generic forms — first hit wins
+  async function wiktionaryDeep(term) {
+    let first = await fetchWiktionary(term).catch(() => null);
+    if (first && first.senses && first.senses.length) return first;
+    // The phrase itself gets a second chance before we fall back to a shortened
+    // form — one flaky response was enough to send us down the ladder, which is
+    // why an entry could say "defined as <shorter form>" and then quietly get its
+    // own definition after a couple of Re-fetches. Mirrors tryVariants().
+    await new Promise((r) => setTimeout(r, 700));
+    const retry = await fetchWiktionary(term).catch(() => null);
+    if (retry && retry.senses && retry.senses.length) return retry;
+    if (!first) first = retry;
+    for (const v of phraseVariants(term)) {
+      const r = await fetchWiktionary(v).catch(() => null);
+      if (r && r.senses && r.senses.length) { r.variantOf = v; return r; }
+    }
+    return first;
+  }
+
+  // ---- Origin: why people say this -------------------------------------------
+  // Mirrors fetchOrigin() in the extension's background.js — same two tiers
+  // (Wiktionary Etymology, else the literal reading of the phrase's core image),
+  // same cleaning. The Action API sends origin=* so it is reachable from the
+  // browser, unlike Youdao/M-W.
+  const WIKI_API = "https://en.wiktionary.org/w/api.php";
+  const wikiTitle = (t) => encodeURIComponent(String(t).trim().replace(/\s+/g, "_"));
+  const JUNK_DEF = /^(simple past|past participle|present participle|third-person|second-person|first-person|plural|singular|nominative|comparative|superlative|alternative (form|spelling|letter-case)|inflection|gerund|obsolete (form|spelling)|misspelling|initialism|abbreviation|acronym|synonym|archaic (form|spelling))\b|\bform of\b|\bof\s+[a-z-]+\.?$/i;
+  function cleanWikiHtml(html) {
+    let s = String(html || "");
+    s = s.replace(/<ol class="references"[\s\S]*?<\/ol>/gi, "").replace(/<sup[\s\S]*?<\/sup>/gi, "")
+         .replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<h[1-6][\s\S]*?<\/h[1-6]>/gi, "")
+         .replace(/<[^>]+>/g, " ");
+    s = s.replace(/&(nbsp|#160);/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+         .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+         .replace(/&#(\d+);/g, (m, n) => { try { return String.fromCodePoint(+n); } catch (e) { return m; } });
+    s = s.replace(/\s+/g, " ").trim().replace(/^\[\s*edit\s*\]\s*/i, "")
+         .replace(/\s+([,.;:!?)\]\u201d])/g, "$1").replace(/([(\[\u201c])\s+/g, "$1");
+    const treeAt = s.indexOf("Etymology tree");
+    if (treeAt >= 0) {
+      const m = s.slice(treeAt).match(/\b(From|Borrowed|Probably|Possibly|Ultimately|Attested|By |Calque|Coined|Compare|Uncertain|Back-formation|Blend|Contraction|Clipping|Inherited|Doublet|Abbreviation|Alteration)\b/);
+      s = m ? s.slice(treeAt + m.index) : s.replace(/^.*?\bder\.\s+\S+\s+/, "");
+    }
+    return s.trim();
+  }
+  function trimToSentences(s, max) {
+    const lim = max || 360;
+    if (s.length <= lim) return s;
+    const cut = s.slice(0, lim);
+    const stop = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "));
+    return stop > 80 ? cut.slice(0, stop + 1) : cut.replace(/\s+\S*$/, "") + "\u2026";
+  }
+  async function fetchEtymology(term) {
+    let secs;
+    try {
+      const j = await jget(`${WIKI_API}?action=parse&page=${wikiTitle(term)}&prop=sections&format=json&formatversion=2&origin=*`);
+      secs = j && j.parse && j.parse.sections;
+    } catch (e) { return null; }
+    if (!Array.isArray(secs)) return null;
+    let lang = "", idx = null;
+    for (const sec of secs) {
+      if (sec.toclevel === 1) { lang = sec.line || ""; continue; }
+      if (lang === "English" && /^Etymology/i.test(sec.line || "")) { idx = sec.index; break; }
+    }
+    if (idx == null) return null;
+    try {
+      const j2 = await jget(`${WIKI_API}?action=parse&page=${wikiTitle(term)}&prop=text&section=${encodeURIComponent(idx)}&format=json&formatversion=2&origin=*`);
+      const txt = cleanWikiHtml(j2 && j2.parse && j2.parse.text);
+      if (!txt || txt.length < 12) return null;
+      return { text: trimToSentences(txt), of: String(term).toLowerCase(), kind: "etymology" };
+    } catch (e) { return null; }
+  }
+  function imageCandidates(term) {
+    const w = String(term || "").toLowerCase().replace(/\s+/g, " ").trim().split(" ");
+    if (w.length < 2) return [];
+    const out = [];
+    const add = (a) => { const v = a.join(" ").trim(); if (v && v !== w.join(" ") && out.indexOf(v) < 0) out.push(v); };
+    let i = 0; while (i < w.length - 1 && PH_SKIP.test(w[i])) i++;
+    let j = w.length; while (j > i + 1 && PH_TAIL.test(w[j - 1])) j--;
+    add(w.slice(i, j));
+    if (j - i > 2) add(w.slice(j - 2, j));
+    if (j - i > 1) add(w.slice(j - 1, j));
+    out.slice().forEach((v) => {
+      const last = v.split(" ").pop();
+      if (!/[a-z]{3,}s$/.test(last) || /ss$/.test(last)) return;
+      // "scales" → "scale", not "scal" — only the -es- plural loses two letters
+      const sg = /ies$/.test(last) ? last.replace(/ies$/, "y")
+        : /(s|x|z|ch|sh)es$/.test(last) ? last.slice(0, -2) : last.replace(/s$/, "");
+      add(v.split(" ").slice(0, -1).concat([sg]));
+    });
+    return out.slice(0, 5);
+  }
+  async function fetchOrigin(term) {
+    const t = String(term || "").toLowerCase().trim();
+    if (!t) return null;
+    const ety = await fetchEtymology(t).catch(() => null);
+    if (ety) return ety;
+    if (!/\s/.test(t)) return null;
+    for (const c of imageCandidates(t)) {
+      const wik = await fetchWiktionary(c).catch(() => null);
+      const usable = ((wik && wik.senses) || []).filter((x) => x.definition && x.definition.length > 20 && !JUNK_DEF.test(x.definition));
+      const def = usable.find((x) => /noun/i.test(x.pos || "")) || usable[0];
+      if (def) return { text: trimToSentences(def.definition, 240), of: c, kind: "literal" };
+    }
+    return null;
+  }
+
   async function fetchWiktionary(term) {
     const title = term.trim().replace(/\s+/g, "_");
     let j;
@@ -214,8 +455,8 @@
   }
   // ---- ONE canonical frequency vocabulary (same band keys/labels as the extension),
   // shared by the notebook chip, the detail meter and the synonym tags.
-  const FREQ_CN = { core: "极高频", "very-common": "高频", common: "常用", mid: "中频", low: "低频", rare: "生僻" };
-  const FREQ_NOTE = { core: "日常核心", "very-common": "日常常用", common: "常用", mid: "偏书面", low: "书面/专业", rare: "罕见" };
+  const FREQ_CN = { core: "core", "very-common": "very common", common: "common", mid: "mid", low: "low", rare: "rare" };
+  const FREQ_NOTE = { core: "everyday core", "very-common": "everyday", common: "common", mid: "leans written", low: "written / technical", rare: "rare" };
   const BAND_FILL = { core: 7, "very-common": 6, common: 5, mid: 4, low: 3, rare: 2 };
   // occurrences-per-million (Datamuse "f:") → Zipf band, mirroring background.js
   function bandOf(f) {
@@ -274,11 +515,11 @@
     const segs = Array.from({ length: 7 }, (_, i) => `<span class="fseg ${i < filled ? "on freq-" + f.band : ""}"></span>`).join("");
     const label = FREQ_CN[f.band] + (FREQ_NOTE[f.band] ? " · " + FREQ_NOTE[f.band] : "");
     const nums = f.curated
-      ? "按精选词库的常用度评估"
+      ? "rated against the curated list"
       : isPhrase
-        ? `Zipf ${f.zipf} · ≈ ${f.perMillion}/百万词`
-        : `Zipf ${f.zipf} · ≈ ${f.perMillion}/百万词 · 估算词频排名 ~${fmtRank(f.rankEst)}`;
-    return `<div class="card"><h2 class="sec">词频${isPhrase ? "(短语)" : ""}</h2>
+        ? `Zipf ${f.zipf} · ≈ ${f.perMillion}/million`
+        : `Zipf ${f.zipf} · ≈ ${f.perMillion}/million · estimated rank ~${fmtRank(f.rankEst)}`;
+    return `<div class="card"><h2 class="sec">Frequency${isPhrase ? "(phrase)" : ""}</h2>
       <div class="fbars">${segs}</div>
       <div class="finfo"><span class="fband freq-${f.band}">${esc(label)}</span><span class="fnums">${nums}</span></div>
     </div>`;
@@ -312,8 +553,25 @@
 
   async function fetchDatamuse(term) {
     const isPhrase = /\s/.test(term);
-    const out = { synonyms: [], synonymsRich: [], family: [], lookalikes: [], collocations: [] };
-    // synonyms with each word's own pos / band / definition (近义辨析)
+    const out = { synonyms: [], synonymsRich: [], family: [], lookalikes: [], collocations: [], defs: [] };
+    // Last-resort dictionary: Datamuse answers reliably, needs no key and is
+    // CORS-open, so the card is never empty just because two other sources were
+    // slow. It returns nothing for a non-word rather than something plausible.
+    if (!isPhrase) {
+      try {
+        const own = await withTimeout(jget(dmURL("sp", term, "max=1&md=dp")), 6000, []);
+        const hit = (own || [])[0];
+        if (hit && String(hit.word || "").toLowerCase() === term.toLowerCase() && Array.isArray(hit.defs)) {
+          out.defs = hit.defs.slice(0, 5).map((d) => {
+            const i = d.indexOf("\t");
+            const pos = i > 0 ? ({ n: "noun", v: "verb", adj: "adjective", adv: "adverb" }[d.slice(0, i)] || "") : "";
+            const def = (i > 0 ? d.slice(i + 1) : d).trim();
+            return { pos: POS_SHORT[pos] || pos, definition: def.charAt(0).toUpperCase() + def.slice(1) };
+          }).filter((m) => m.definition);
+        }
+      } catch (e) {}
+    }
+    // synonyms with each word's own pos / band / definition (Synonyms)
     try {
       const syn = await withTimeout(jget(dmURL("ml", term, "max=10&md=dpf")), 6000, []);
       out.synonymsRich = (syn || []).filter((x) => x.word && x.word !== term).slice(0, 8).map(parseDm);
@@ -383,11 +641,11 @@
     const isPhrase = /\s/.test(term);
     const [dict, wik, dm, cn, freq] = await Promise.all([
       isPhrase ? Promise.resolve(null) : withTimeout(fetchDictionary(term), 8000, null),
-      withTimeout(fetchWiktionary(term), 8000, null),
+      withTimeout(wiktionaryDeep(term), 9000, null),   // …and its generic forms, for phrases
       withTimeout(fetchDatamuse(term), 8000, { synonyms: [], synonymsRich: [], family: [], lookalikes: [], collocations: [] }),
       // a word-for-word MT of an idiom is misleading ("领先于曲线"), so for phrases
       // the CN gloss comes from the translated definition in phase 2 instead.
-      getSettings().chinese && !isPhrase ? withTimeout(fetchCn(term), 7000, "") : Promise.resolve(""),
+      wantCnNow() && !isPhrase ? withTimeout(fetchCn(term), 7000, "") : Promise.resolve(""),
       withTimeout(fetchFreq(term), 6000, null),
     ]);
     // meanings: dictionary senses first, Wiktionary filling the rest (deduped)
@@ -405,8 +663,16 @@
       seen.add(key);
       meanings.push({ pos: m.pos || "", definition: m.definition, cn: m.cn || "", example: m.example || "", _k: clean });
     };
-    ((dict && dict.meanings) || []).forEach(addSense);
-    ((wik && wik.senses) || []).forEach(addSense);
+    // ONE dictionary wins, the others are only a safety net. Merging two
+    // dictionaries is what produced the same meaning twice in different words —
+    // and no token-overlap test catches that reliably.
+    const dmDefs = (dm && dm.defs) || null;
+    let sensesFrom = "";
+    if (dict && (dict.meanings || []).length) { sensesFrom = "dictionaryapi"; dict.meanings.forEach(addSense); }
+    else if (wik && (wik.senses || []).length) { sensesFrom = "wiktionary"; wik.senses.forEach(addSense); }
+    else if (dmDefs && dmDefs.length) { sensesFrom = "datamuse"; dmDefs.forEach(addSense); }
+    // the hit came from a shortened form of the phrase — label it (see cardHTML)
+    const sensesOf = (sensesFrom === "wiktionary" && wik.variantOf && wik.variantOf !== norm(term)) ? wik.variantOf : "";
     meanings.splice(5);
     meanings.forEach((m) => delete m._k);
     // examples: dictionary usage lines + Wiktionary citations (Tatoeba comes in phase 2)
@@ -428,7 +694,7 @@
       audioUs: (dict && dict.audioUs) || "", audioUk: (dict && dict.audioUk) || "",
       meanings, examples: examples.slice(0, 4), morph,
       synonyms: dm.synonyms, synonymsRich: dm.synonymsRich, family: dm.family,
-      lookalikes: dm.lookalikes, collocations: dm.collocations, suggestions,
+      lookalikes: dm.lookalikes, collocations: dm.collocations, suggestions, sensesFrom, sensesOf,
     };
   }
 
@@ -437,7 +703,7 @@
   // Best-effort and idempotent, so it is safe to re-run on a saved word.
   async function enrichPreview(p) {
     if (!p || p.error) return p;
-    const wantCn = getSettings().chinese;
+    const wantCn = wantCnNow();
     // Wiktionary often supplies bare collocations ("meticulous search") rather
     // than sentences, so top up from Tatoeba unless we already have real ones,
     // then float the sentence-like examples to the top.
@@ -450,6 +716,11 @@
     };
     if ((p.examples || []).filter((e) => wordy(e.text)).length < 2) {
       addEx(await withTimeout(fetchTatoeba(p.term), 8000, []));
+    }
+    // WHY people say this — two extra Wiktionary calls, so phase 2, never phase 1
+    if (!p.origin) {
+      const og = await withTimeout(fetchOrigin(p.term), 11000, null);
+      if (og && og.text) p.origin = og;
     }
     // A derived form ("perceptively") often has no corpus sentences of its own,
     // which is why the 例句 card came up empty. Fall back to the base word — a
@@ -480,8 +751,63 @@
       if (!p.cn) p.cn = ((p.meanings || [])[0] || {}).cn || await withTimeout(fetchCn(p.term), 7000, "");
     }
     if (!p.freq) p.freq = (await withTimeout(fetchFreq(p.term), 6000, null)) || curatedFreq(p.term);
+    // No sense anywhere and the term is MADE of parts → gloss the parts, so the
+    // entry has real content instead of "没有找到释义". A plain single word is
+    // skipped on purpose: there, an empty result is a transient failure or a
+    // typo, and glossing the word with itself would be a lie dressed as help.
+    if (!(p.meanings || []).length && !p.partGlosses && window.lexisBreakdownParts) {
+      const bp = window.lexisBreakdownParts(p.term);
+      if (bp.kind !== "word" && bp.parts.length) {
+        const pg = await fetchPartGlosses(bp.parts, wantCn);
+        if (Object.keys(pg).length) p.partGlosses = pg;
+      }
+    }
     p.enriched = true;
     return p;
+  }
+  // ---- breakdown: a term no dictionary lists still gets content ------------
+  // "latency-sensitive" is built on demand by a productive pattern and "the
+  // history will write the verdict" is a clause, not a lexical item — neither
+  // will EVER have an entry. The pattern gloss, the chunks inside it and the
+  // classification are computed offline in data/vocab.js; only a one-line gloss
+  // per part needs the network. Mirrors fetchPartGlosses() in background.js.
+  // dictionaryapi.dev groups senses by part of speech in its own order, so sense
+  // #1 of "sensitive" is the rare NOUN. The pos with the MOST senses is the
+  // word's real job. (Same helper in background.js — keep them in step.)
+  function bestSense(list) {
+    const groups = new Map();
+    (list || []).forEach((m) => {
+      if (!m || !m.definition) return;
+      const k = (m.pos || "").toLowerCase();
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(m);
+    });
+    let best = null;
+    groups.forEach((v) => { if (!best || v.length > best.length) best = v; });
+    return best ? best[0] : null;
+  }
+  const partGlossCache = {};
+  async function fetchPartGlosses(parts, wantCn) {
+    const out = {};
+    await Promise.all((parts || []).slice(0, 6).map(async (raw) => {
+      const k = String(raw || "").toLowerCase().replace(/[^a-z'-]/g, "");
+      if (!k || k.length < 2) return;
+      if (partGlossCache[k]) { out[k] = partGlossCache[k]; return; }
+      let g = null;
+      const dict = await withTimeout(fetchDictionary(k), 7000, null);
+      const dm0 = dict && bestSense(dict.meanings);
+      if (dm0) g = { pos: dm0.pos || "", definition: dm0.definition };
+      if (!g) {
+        const wk = await withTimeout(fetchWiktionary(k), 7000, null);
+        const s = wk && bestSense(wk.senses);
+        if (s) g = { pos: s.pos || "", definition: s.definition };
+      }
+      if (!g) return;
+      if (wantCn) { try { g.cn = await withTimeout(fetchCn(k), 6000, ""); } catch (e) {} }
+      partGlossCache[k] = g;
+      out[k] = g;
+    }));
+    return out;
   }
   // one-shot lookup with phase 2 already applied (used when saving without a card)
   async function lookupFull(term) { return enrichPreview(await lookup(term)); }
@@ -493,11 +819,12 @@
       const meaning = p.meaning ? `<small>${esc(p.meaning)}</small>` : "";
       return (i ? `<span class="mplus">+</span>` : "") + `<div class="mpart"><b>${esc(p.text)}</b>${meaning}</div>`;
     }).join("");
-    return `<div class="card"><h2 class="sec">词根拆解</h2><div class="morph">${parts}</div></div>`;
+    return `<div class="card"><h2 class="sec">Word parts</h2><div class="morph">${parts}</div></div>`;
   }
-  function cardHTML(p, opts) {
+  function cardHTML(p0, opts) {
+    const p = asShown(p0);
     opts = opts || {};
-    if (p.error) return `<div class="empty">出错了，请重试。</div>`;
+    if (p.error) return `<div class="empty">Something went wrong — try again.</div>`;
     const spk = (label, url) => `<button class="speak" data-audio="${esc(url || "")}" data-w="${esc(p.term)}" title="${label}">🔊</button>`;
     let h = `<div class="card">
       <div class="row" style="align-items:baseline">
@@ -510,11 +837,48 @@
       ${opts.saveBtn ? `<div class="row" style="margin-top:12px">${opts.saveBtn}</div>` : ""}
     </div>`;
 
-    if (!p.meanings.length && !p.isPhrase && !p.cn) {
+    // Breakdown — the composed entry for a term no dictionary lists (and never
+    // will): a productive compound, or a clause you liked. Everything here is
+    // labelled as composed; we still never pass a part's meaning off as the
+    // whole term's meaning.
+    const bdObj = (!p.meanings.length && window.lexisTermBreakdown)
+      ? window.lexisTermBreakdown(p.term, p.partGlosses) : null;
+    const bdOk = !!(bdObj && window.lexisBreakdownUseful && window.lexisBreakdownUseful(bdObj));
+    if (bdOk) {
+      const KIND0 = window.LEXIS_KIND_CN || {};
+      const bparts = bdObj.parts.filter((x) => x.definition || x.cn);
+      h += `<div class="card"><h2 class="sec">Breakdown</h2>
+        <p class="muted" style="font-size:12px;margin:0 0 8px">${bdObj.kind === "compound"
+          ? "No dictionary entry — but it is transparent once you see the pattern."
+          : "No dictionary entry: a free combination, not a fixed expression. Here is what it is built from."}</p>
+        ${bdObj.gloss ? `<div class="bd-gloss serif">${esc(bdObj.gloss.en)}${bdObj.gloss.cn && !enOnly() ? `<div class="bd-cn">${esc(bdObj.gloss.cn)}</div>` : ""}
+          <div class="bd-pat">A regular pattern: <b>X-${esc(bdObj.gloss.tail)}</b> — English builds these on demand.</div></div>` : ""}
+        ${bparts.map((x) => `<div class="bd-part"><button class="bd-w" data-look="${esc(x.word)}">${esc(x.word)}</button>${x.pos ? ` <small>${esc(x.pos)}</small>` : ""}
+          <div class="bd-d">${esc(x.definition)}${x.cn ? ` · ${esc(x.cn)}` : ""}</div></div>`).join("")}
+        ${(bdObj.inside || []).length ? `<div class="bd-inside"><p class="muted" style="font-size:12px;margin:0 0 6px">Fixed expressions inside it — the part worth keeping on its own:</p>
+          ${bdObj.inside.map((c) => `<div class="chk-row"><div class="chk-h"><button class="chk-w" data-look="${esc(c.term)}">${esc(c.term)}</button>
+            <span class="chk-tag chk-${esc(c.kind)}">${esc(KIND0[c.kind] || c.kind)}</span>
+            <button class="chk-add" data-addchunk="${esc(c.term)}">＋</button></div></div>`).join("")}</div>` : ""}
+      </div>`;
+    }
+    if (!p.meanings.length && !bdOk && !p.isPhrase && !p.cn) {
       if (p.suggestions && p.suggestions.length) {
-        h += `<div class="card"><h2 class="sec">你要找的是不是</h2>` +
-          p.suggestions.map((s) => `<div class="item" data-look="${esc(s.word)}"><span class="w serif">${esc(s.word)}</span><span class="meta">${esc(s.definition)}</span></div>`).join("") + `</div>`;
-      } else h += `<div class="card muted">没有找到释义。</div>`;
+        // if this term is already saved, picking a suggestion should FIX that
+        // entry — not silently add a second one and leave the broken original
+        const saved = findWord(p.term);
+        h += `<div class="card"><h2 class="sec">Dictionary forms</h2>` +
+          p.suggestions.map((s) => `<div class="item" data-look="${esc(s.word)}"><span class="w serif">${esc(s.word)}</span><span class="meta">${esc(s.definition)}</span>${saved ? `<button class="btn" data-replace="${esc(s.word)}" data-replace-id="${esc(saved.id)}" style="margin-left:auto;font-size:12px;padding:5px 10px">Use this instead</button>` : ""}</div>`).join("") +
+          (saved ? `<div class="muted" style="font-size:12px;margin-top:6px">Use this instead <b>replaces</b> the saved entry and re-queries it — never adds a second.</div>` : "") + `</div>`;
+      } else {
+        // Sentences we DID find are evidence the phrase is real even when no
+        // dictionary lists it — the same "先别急着删" card the extension shows.
+        const real = (p.examples || []).filter((e) => e && e.text);
+        h += real.length
+          ? `<div class="card"><h2 class="sec">Real usage ·  ${real.length}</h2>
+              <p class="muted" style="font-size:12px;margin:0 0 8px">No standalone dictionary entry, but these are real corpus uses — the expression does exist. Don't delete it yet.</p>
+              ${real.slice(0, 5).map((e) => `<div class="ex">${esc(e.text)}${e.translation ? `<div class="tr">${esc(e.translation)}</div>` : ""}</div>`).join("")}</div>`
+          : `<div class="card muted">No definition found. The dictionary may file it under another form (your → one's),Re-fetching usually finds it.</div>`;
+      }
     }
     // highlight the headword inside example sentences
     const hi = (txt) => {
@@ -525,8 +889,22 @@
     };
     // 释义 (memory-first)
     if (p.meanings.length) {
-      h += `<div class="card"><h2 class="sec">释义</h2>` + p.meanings.map((m) =>
+      // A saved phrase is often a surface fragment whose dictionary headword is
+      // shorter ("quibble about" → "quibble"). We look that up rather than showing
+      // nothing — but the definition belongs to the shorter form, so name it.
+      h += `<div class="card"><h2 class="sec">Meanings${p.sensesFrom ? ` <span class="sense-src">${esc(DICT_NAME[p.sensesFrom] || p.sensesFrom)}</span>` : ""}</h2>`
+        + (p.sensesOf ? `<div class="senses-of">Defined as <b>${esc(p.sensesOf)}</b> — no dictionary entry for the phrase as you saved it.</div>` : "")
+        + p.meanings.map((m) =>
         `<div class="mean">${m.pos ? `<span class="pos">${esc(m.pos)}</span> ` : ""}<span class="def">${esc(m.definition)}</span>${m.cn ? `<div class="cn">${esc(m.cn)}</div>` : ""}</div>`).join("") + `</div>`;
+    }
+    // Origin — knowing the picture behind a phrase is what makes it recallable
+    if (p.origin && p.origin.text) {
+      const o = p.origin, lit = o.kind === "literal";
+      h += `<div class="card"><h2 class="sec">Origin</h2><div class="origin-card">`
+        + (lit ? `<div class="org-lead">Literally, <b>${esc(o.of)}</b> is:</div>`
+               : (o.of && o.of !== norm(p.term) ? `<div class="org-lead">Origin of <b>${esc(o.of)}</b></div>` : ""))
+        + `<div class="org-body">${esc(o.text)}</div>`
+        + `<div class="org-src">${lit ? "literal sense" : "etymology"} · Wiktionary</div></div></div>`;
     }
     // 例句 — your OWN sentences first (they're the ones you'll actually remember),
     // then the fetched ones. While phase 2 is still running we keep the section
@@ -535,35 +913,61 @@
       const mine = p.userExamples || [];
       const exs = p.examples || [];
       if (mine.length || exs.length || opts.pending || opts.addExample) {
-        h += `<div class="card"><h2 class="sec">例句</h2>` +
-          mine.map((e, i) => `<div class="ex mine">${hi(e.text)}${e.translation ? `<div class="tr">${esc(e.translation)}</div>` : ""}<div class="src">我的例句${opts.addExample ? ` · <button class="linklike" data-delex="${i}">删除</button>` : ""}</div></div>`).join("") +
-          exs.map((e) => `<div class="ex">${hi(e.text)}${e.translation ? `<div class="tr">${esc(e.translation)}</div>` : ""}${e.from ? `<div class="src">来自同词族 <b>${esc(e.from)}</b></div>` : ""}</div>`).join("") +
-          (opts.pending ? `<div class="muted" style="font-size:12px"><span class="spin"></span> 正在增补例句与中文…</div>` : "") +
-          (!exs.length && !mine.length && !opts.pending ? `<div class="muted" style="font-size:13px">语料库里没有现成例句——自己写一句反而最记得住。</div>` : "") +
-          (opts.addExample ? `<div class="row" style="margin-top:10px"><button class="btn" id="addExBtn">＋ 添加我的例句</button></div>` : "") +
+        h += `<div class="card"><h2 class="sec">Examples</h2>` +
+          mine.map((e, i) => `<div class="ex mine">${hi(e.text)}${e.translation ? `<div class="tr">${esc(e.translation)}</div>` : ""}<div class="src">My sentences${opts.addExample ? ` · <button class="linklike" data-delex="${i}">delete</button>` : ""}</div></div>`).join("") +
+          exs.map((e) => `<div class="ex">${hi(e.text)}${e.translation ? `<div class="tr">${esc(e.translation)}</div>` : ""}${e.from ? `<div class="src">from the same family  <b>${esc(e.from)}</b></div>` : ""}</div>`).join("") +
+          (opts.pending ? `<div class="muted" style="font-size:12px"><span class="spin"></span> Topping up examples and gloss……</div>` : "") +
+          (!exs.length && !mine.length && !opts.pending ? `<div class="muted" style="font-size:13px">No corpus sentence for this one — writing your own works better anyway.</div>` : "") +
+          (opts.addExample ? `<div class="row" style="margin-top:10px"><button class="btn" id="addExBtn">＋ Add my own sentence</button></div>` : "") +
           `</div>`;
       }
     }
-    // 常用搭配 (collocations)
-    if (p.collocations && p.collocations.length) {
-      h += `<div class="card"><h2 class="sec">常用搭配</h2><div class="row">` +
-        p.collocations.map((c) => { const ph = c.phrase || c; return `<span class="chip" data-look="${esc(ph)}">${esc(ph)}</span>`; }).join("") + `</div></div>`;
+    // Phrasal verbs / Fixed expressions that use this word — straight out of the
+    // same pools Discover uses: offline, instant, tagged the same way, and each
+    // one savable. Replaces the Datamuse bigrams, which matched no category the
+    // app teaches and needed a request per phrase before they were readable.
+    let chunkList = (typeof window.lexisChunksWith === "function") ? window.lexisChunksWith(p.term, 8) : [];
+    // A word the pools don't cover still gets this card: the statistical
+    // combinations run through the SAME classifier and wear the SAME chips,
+    // instead of a second card with its own vocabulary next to this one.
+    let chunkStat = false;
+    if (!chunkList.length && (p.collocations || []).length) {
+      chunkStat = true;
+      chunkList = p.collocations.map((c) => {
+        const t = window.lexisCleanChunk ? window.lexisCleanChunk(String(c.phrase || c || "")) : String(c.phrase || c || "");
+        return { term: t, kind: (window.lexisKindOf ? window.lexisKindOf(t) : "expr"),
+          ptype: (window.lexisPhraseType ? window.lexisPhraseType(t) : ""), gloss: c.definition || "", example: c.example || "" };
+      }).filter((c) => c.term);
     }
-    // 词根拆解
+    if (chunkList.length) {
+      const KIND = window.LEXIS_KIND_CN || {}, PT = window.LEXIS_PTYPE_CN || {};
+      const saved = new Set(getWords().map((w) => norm(w.word)));
+      h += `<div class="card"><h2 class="sec">Phrasal verbs · Fixed expressions</h2>` +
+        (chunkStat ? `<p class="muted" style="font-size:12px;margin:0 0 8px">Not in the curated pools — these are the combinations this word actually occurs in, tagged the same way.</p>` : "") +
+        chunkList.map((c) => `<div class="chk-row">
+          <div class="chk-h"><button class="chk-w" data-look="${esc(c.term)}">${esc(c.term)}</button>
+            <span class="chk-tag chk-${esc(c.kind)}">${esc(KIND[c.kind] || c.kind)}</span>
+            ${c.ptype && c.ptype !== c.kind ? `<span class="chk-tag">${esc(PT[c.ptype] || c.ptype)}</span>` : ""}
+            ${saved.has(norm(c.term)) ? `<span class="chk-add saved">saved</span>` : `<button class="chk-add" data-addchunk="${esc(c.term)}">＋</button>`}</div>
+          ${c.gloss ? `<div class="chk-d">${esc(c.gloss)}</div>` : ""}
+          ${c.example ? `<div class="chk-e">${esc(c.example)}</div>` : ""}
+        </div>`).join("") + `</div>`;
+    }
+    // Word parts
     h += morphHTML(p.morph);
     // 词族 (with pos)
-    if (p.family && p.family.length) h += `<div class="card"><h2 class="sec">词族</h2><div class="row">` +
+    if (p.family && p.family.length) h += `<div class="card"><h2 class="sec">Word family</h2><div class="row">` +
       p.family.map((f) => { const w = f.word || f; const pos = f.pos ? ` <small>${esc(f.pos)}</small>` : ""; return `<span class="chip" data-look="${esc(w)}">${esc(w)}${pos}</span>`; }).join("") + `</div></div>`;
-    // 近义辨析 — each synonym with its own pos / band / definition
+    // Synonyms — each synonym with its own pos / band / definition
     const synRich = (p.synonymsRich && p.synonymsRich.length) ? p.synonymsRich
       : (p.synonyms || []).map((w) => ({ word: w }));
     if (synRich.length) {
-      h += `<div class="card"><h2 class="sec">近义辨析</h2>` + synRich.map((s) =>
+      h += `<div class="card"><h2 class="sec">Synonyms</h2>` + synRich.map((s) =>
         `<div class="syn"><div class="syn-h"><button class="syn-w" data-look="${esc(s.word)}">${esc(s.word)}</button>${s.pos ? `<span class="pos">${esc(s.pos)}</span>` : ""}${s.band ? `<span class="mfreq freq-${s.band}">${esc(s.bandCn || "")}</span>` : ""}</div>${s.definition ? `<div class="syn-d">${esc(s.definition)}${s.cn ? ` · ${esc(s.cn)}` : ""}</div>` : ""}</div>`).join("") + `</div>`;
     }
-    // 形近词 (easily confused)
+    // Look-alikes (easily confused)
     if (p.lookalikes && p.lookalikes.length) {
-      h += `<div class="card"><h2 class="sec">形近词</h2>` + p.lookalikes.map((c) =>
+      h += `<div class="card"><h2 class="sec">Look-alikes</h2>` + p.lookalikes.map((c) =>
         `<div class="conf"><button class="conf-w" data-look="${esc(c.word)}">${esc(c.word)}</button><span class="conf-d">${esc(c.definition || c.cn || "")}</span></div>`).join("") + `</div>`;
     }
     // 词频 (detail-only, like the extension: a measured stat, not part of the meaning)
@@ -572,19 +976,36 @@
   }
   function wireCard(root) {
     root.querySelectorAll("[data-audio]").forEach((b) => b.addEventListener("click", () => speak(b.dataset.w, b.dataset.audio)));
+    root.querySelectorAll("[data-replace]").forEach((b) => b.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const to = b.dataset.replace;
+      const ws = getWords();
+      const rec = ws.find((x) => x.id === b.dataset.replaceId);
+      if (!rec || !confirm(`Replace “${rec.word}」to “${to}」and re-query?\n(The existing entry is replaced, not duplicated.`)) return;
+      replaceWordTerm(rec, to);
+    }));
     root.querySelectorAll("[data-look]").forEach((b) => b.addEventListener("click", () => doLookup(b.dataset.look)));
+    // ＋ on a phrasal verb / fixed expression: look it up properly and keep it,
+    // without leaving the card you are reading
+    root.querySelectorAll("[data-addchunk]").forEach((b) => b.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      const t = b.dataset.addchunk;
+      b.textContent = "…"; b.disabled = true;
+      await autoAdd(t, "", "From a look-up card");
+      b.textContent = "saved"; b.classList.add("saved");
+    }));
   }
-  // ---- 我的例句: sentences you type in yourself ------------------------
+  // ---- My sentences: sentences you type in yourself ------------------------
   // Kept in `data.userExamples` and always rendered ABOVE the fetched ones. The
   // Chinese line is auto-translated (best effort) so you only type the English.
   function wireExampleEditor(root, p, onChange) {
     const add = root.querySelector("#addExBtn");
     if (add) add.addEventListener("click", async () => {
-      const text = (prompt("写一句用到「" + p.term + "」的例句:", "") || "").trim();
+      const text = (prompt("Write a sentence using “" + p.term + "」 example:", "") || "").trim();
       if (!text) return;
       p.userExamples = (p.userExamples || []).concat([{ text, translation: "", at: now() }]);
       onChange();
-      if (getSettings().chinese) {
+      if (wantCnNow()) {
         const zh = await translateOne(text);
         const hit = (p.userExamples || []).find((e) => e.text === text);
         if (zh && hit) { hit.translation = zh; onChange(); }
@@ -602,30 +1023,64 @@
   function saveWord(p) {
     const words = getWords();
     if (words.some((w) => w.lookup === p.term)) return false;
+    untombstone(p.term);   // saving it again is an explicit "I want this back"
     words.unshift({
       id: "w" + now() + Math.random().toString(36).slice(2, 6),
       word: p.term, lookup: p.term, createdAt: now(), updatedAt: now(),
       context: p.context || "",
       // every original sentence is kept as a dated sighting so past examples never get lost
-      sightings: p.context ? [{ context: p.context, at: now(), source: p.source || "粘贴保存" }] : [],
+      sightings: p.context ? [{ context: p.context, at: now(), source: p.source || "Paste & save" }] : [],
       status: p.meanings.length || p.cn ? "ready" : "notfound",
       data: {
         phonetic: p.phonetic, audioUs: p.audioUs, audioUk: p.audioUk, cn: p.cn, freq: p.freq || null,
         meanings: p.meanings, examples: p.examples, userExamples: p.userExamples || [], morph: p.morph,
         synonyms: p.synonyms, synonymsRich: p.synonymsRich, family: p.family,
         lookalikes: p.lookalikes, collocations: p.collocations, isPhrase: p.isPhrase,
+        origin: p.origin || null, sensesOf: p.sensesOf || "", sensesFrom: p.sensesFrom || "",
+        // the composed entry for a term no dictionary lists — see the breakdown
+        // card in cardHTML(); without this it was thrown away on save
+        partGlosses: p.partGlosses || null,
       },
       srs: { due: now(), interval: 0, ease: 2.5, reps: 0, lapses: 0, last: 0 },
     });
     setWords(words);
     return true;
   }
-  function removeWord(id) { setWords(getWords().filter((w) => w.id !== id)); }
+  // Replace a saved entry's headword in place and re-query it — never leave the
+  // broken original sitting in the notebook next to a new one.
+  async function replaceWordTerm(rec, to) {
+    untombstone(to);
+    toast("Re-querying……");
+    const p = await lookupFull(to);
+    const ws = getWords();
+    const r2 = ws.find((x) => x.id === rec.id);
+    if (!r2) return;
+    r2.word = p.term; r2.lookup = norm(p.term);
+    r2.data = Object.assign({}, r2.data, {
+      cn: p.cn, phonetic: p.phonetic, audioUs: p.audioUs, audioUk: p.audioUk, freq: p.freq || null,
+      meanings: p.meanings, examples: p.examples, synonyms: p.synonyms, synonymsRich: p.synonymsRich,
+      family: p.family, lookalikes: p.lookalikes, collocations: p.collocations, isPhrase: p.isPhrase,
+      suggestions: [], notFound: !p.meanings.length && !p.cn,
+    });
+    r2.status = p.meanings.length || p.cn ? "ready" : "notfound";
+    r2.updatedAt = now();
+    setWords(ws);
+    toast("Renamed to  <b>" + esc(p.term) + "</b>");
+    openDetail(r2.id);
+  }
+
+  function removeWord(id) {
+    const gone = getWords().find((w) => w.id === id);
+    setWords(getWords().filter((w) => w.id !== id));
+    if (gone) tombstone(gone);   // …so it stays deleted on the other devices
+  }
   function wordToPreview(w) {
     const d = w.data || {};
     return { term: w.word, isPhrase: d.isPhrase, cn: d.cn, freq: d.freq || null, phonetic: d.phonetic, audioUs: d.audioUs, audioUk: d.audioUk,
       meanings: d.meanings || [], examples: d.examples || [], userExamples: d.userExamples || [], morph: d.morph, synonyms: d.synonyms || [],
-      synonymsRich: d.synonymsRich || [], family: d.family || [], lookalikes: d.lookalikes || [], collocations: d.collocations || [], extraLoaded: true };
+      synonymsRich: d.synonymsRich || [], family: d.family || [], lookalikes: d.lookalikes || [], collocations: d.collocations || [],
+      origin: d.origin || null, sensesOf: d.sensesOf || "", sensesFrom: d.sensesFrom || "",
+      partGlosses: d.partGlosses || null, extraLoaded: true };
   }
   // Non-destructive merge of a fresh preview into a saved word: only ADD or
   // improve fields, never wipe one a transiently-down source returned empty
@@ -658,6 +1113,20 @@
     const cnGain = (arr, key) => (arr || []).some((x) => x && x[key]);
     if (p.examples && cnGain(p.examples, "translation") && !cnGain(d.examples, "translation")) { d.examples = p.examples; changed = true; }
     if (p.meanings && cnGain(p.meanings, "cn") && !cnGain(d.meanings, "cn")) { d.meanings = p.meanings; changed = true; }
+    fill("sensesOf", p.sensesOf); fill("sensesFrom", p.sensesFrom);
+    fill("origin", p.origin);
+    if (p.partGlosses && Object.keys(p.partGlosses).length) {
+      d.partGlosses = Object.assign({}, d.partGlosses || {}, p.partGlosses); changed = true;
+    }
+    // Settled: it has what an entry needs, so nothing looks it up again on its
+    // own. Same rule as the extension's enrich() — see needsSupplement().
+    // A term no dictionary lists settles on its BREAKDOWN: asking again next week
+    // will not produce an entry that does not exist.
+    const wasDone = d.done;
+    const hasBreakdown = !!(d.partGlosses && Object.keys(d.partGlosses).length);
+    d.done = !!(((d.meanings || []).length && ((d.examples || []).length || (d.userExamples || []).length))
+      || (!(d.meanings || []).length && hasBreakdown)) && (!wantCnNow() || d.cn);
+    if (d.done && !wasDone) { d.doneAt = now(); changed = true; }
     if (changed) {
       if (rec.status === "notfound" && (d.meanings || []).length) rec.status = "ready";
       rec.updatedAt = now();
@@ -695,7 +1164,7 @@
         const keep = richness(base) >= richness(w) ? base : w;
         const lose = keep === base ? w : base;
         keep.sightings = (keep.sightings || []).concat(lose.sightings || [],
-          lose.context && !(lose.sightings || []).length ? [{ context: lose.context, at: lose.createdAt, source: "合并" }] : []);
+          lose.context && !(lose.sightings || []).length ? [{ context: lose.context, at: lose.createdAt, source: "merged" }] : []);
         if (keep.data && lose.data && !(keep.data.userExamples || []).length && (lose.data.userExamples || []).length)
           keep.data.userExamples = lose.data.userExamples;
         keep.updatedAt = now();
@@ -723,7 +1192,7 @@
     }
     return { interval, ease: Math.round(ease * 100) / 100, reps, lapses, last: now(), due };
   }
-  function intervalLabel(d) { if (d < 1) return "10 分钟"; if (d < 30) return d + " 天"; return Math.round(d / 30) + " 个月"; }
+  function intervalLabel(d) { if (d < 1) return "10 min"; if (d < 30) return d + "d"; return Math.round(d / 30) + "mo"; }
   const dueWords = () => getWords().filter((w) => (w.srs ? w.srs.due : 0) <= now());
 
   // =======================================================================
@@ -734,10 +1203,10 @@
 
   function refreshBadge() {
     const n = dueWords().length;
-    $("#dueBadge").textContent = n ? n + " 个待复习" : "";
+    $("#dueBadge").textContent = n ? n + "  due" : "";
   }
 
-  // 查词 and 生词本 are one tab — the search box at the top of the notebook does
+  // 查词 and Notebook are one tab — the search box at the top of the notebook does
   // both: it filters what you've saved as you type, and looks up anything you
   // haven't. `nbView` says whether the tab is currently showing the list, a
   // look-up result, or a saved word's detail.
@@ -751,10 +1220,69 @@
     refreshBadge();
   }
 
+  // ---- select-to-look-up ---------------------------------------------------
+  // Long-press-select any text in the app (a passage, an example, a definition)
+  // and a chip offers 查词 / ＋Notebook — and, while reading an assessment passage,
+  // 不懂 for a whole chunk. Same mechanism the extension's content script gives
+  // you on a normal web page; the app itself had nothing.
+  let selChip = null, selTerm = "", passagePhrases = null;
+  // a drag that overshoots a sentence boundary shouldn't produce "anything. S" —
+  // keep the longest clause of the selection, then trim the punctuation off it
+  function selClause(s) {
+    const parts = String(s || "").split(/[.!?;:,]/).map(cleanTerm).filter(Boolean);
+    return parts.length > 1 ? parts.sort((a, b) => b.length - a.length)[0] : cleanTerm(s);
+  }
+  function hideSelChip() { if (selChip) selChip.classList.remove("show"); selTerm = ""; }
+  function onSelectionChanged() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return hideSelChip();
+    const raw = selClause(sel.toString());
+    const n = raw.split(" ").filter(Boolean).length;
+    if (!raw || n > 6 || raw.length > 60 || !/[A-Za-zÀ-ÿ]{2,}/.test(raw)) return hideSelChip();
+    const range = sel.getRangeAt(0);
+    let node = range.commonAncestorContainer;
+    if (node.nodeType === 3) node = node.parentElement;
+    if (!node || node.closest("input, textarea, .selchip")) return hideSelChip();
+    selTerm = raw;
+    const inPassage = !!node.closest("#ptext") && !!passagePhrases;
+    if (!selChip) {
+      selChip = el(`<div class="selchip"></div>`);
+      document.body.appendChild(selChip);
+      selChip.addEventListener("click", (e) => {
+        const b = e.target.closest("button"); if (!b || !selTerm) return;
+        const t = selTerm, act = b.dataset.act;
+        hideSelChip();
+        try { window.getSelection().removeAllRanges(); } catch (err) {}
+        if (act === "look") { doLookup(t); return; }
+        if (act === "unk" && passagePhrases) { passagePhrases.add(t.toLowerCase()); toast("Chunk marked <b>" + esc(t) + "</b>"); return; }
+        if (act === "save") saveFromSelection(t);
+      });
+    }
+    selChip.innerHTML = `<span class="selchip-t">${esc(raw)}</span>
+      <button data-act="look">Look up</button>
+      ${inPassage ? `<button data-act="unk">Don't know</button>` : ""}
+      <button data-act="save">＋Notebook</button>`;
+    selChip.classList.add("show");
+    const rect = range.getBoundingClientRect();
+    const half = selChip.offsetWidth / 2;
+    selChip.style.left = Math.min(Math.max(rect.left + rect.width / 2, half + 8), window.innerWidth - half - 8) + "px";
+    selChip.style.top = (rect.top > 52 ? rect.top - 10 : rect.bottom + 40) + "px";
+  }
+  async function saveFromSelection(t) {
+    toast("Looking up……");
+    const p = await lookupFull(t);
+    if (saveWord(p)) { toast("Added to your notebook <b>" + esc(t) + "</b>"); refreshBadge(); }
+    else toast("Already in your notebook");
+  }
+  document.addEventListener("mouseup", () => setTimeout(onSelectionChanged, 10));
+  document.addEventListener("touchend", () => setTimeout(onSelectionChanged, 250));
+  document.addEventListener("selectionchange", () => { const s = window.getSelection(); if (!s || s.isCollapsed) hideSelChip(); });
+  document.addEventListener("scroll", hideSelChip, true);
+
   // ---- LOOKUP ----
   // ctx = the sentence the word came from, when the caller has one (?q=&ctx=,
   // mirroring the extension's #look/<term>/<context>). It is shown above the
-  // card AND carried into saveWord, so 原句语境 survives the save.
+  // card AND carried into saveWord, so Original context survives the save.
   // Show a look-up result inside the notebook tab (they are one tab now), hiding
   // the list behind it. closeLookup() puts the list back.
   function openLookupPane() {
@@ -769,15 +1297,15 @@
   async function doLookup(term, ctx) {
     term = norm(term);
     if (!term) return;
-    // 查词与生词本本质是同一件事:已经收藏的词直接打开它的生词本页面(释义/例句都在,
-    // 外加原句语境、掌握进度、我的例句和删除按钮),而不是再给一张只读的查词卡。
+    // 查词与Notebook本质是同一件事:已经收藏的词直接打开它的Notebook页面(释义/例句都在,
+    // 外加Original context、Mastery、My sentences和删除按钮),而不是再给一张只读的查词卡。
     // 带 ctx 的粘贴/快捷指令流程除外——那一步要先让你确认是否追加这条原句。
     const already = findWord(term);
     if (already && !ctx) { openDetail(already.id); return; }
     const box = openLookupPane();
     if (!box) return;
-    box.innerHTML = `<div class="lookup-bar"><button class="btn" id="lkBack">← 生词本</button></div>
-      <div class="empty"><span class="spin"></span> 查询中…</div>`;
+    box.innerHTML = `<div class="lookup-bar"><button class="btn" id="lkBack">← Notebook</button></div>
+      <div class="empty"><span class="spin"></span> Looking up……</div>`;
     $("#lkBack").addEventListener("click", closeLookup);
     const seq = ++doLookup._seq;
     const p = await lookup(term);
@@ -790,20 +1318,20 @@
       // is this exact sentence already recorded on the saved word?
       const ctxKnown = !ctx || (existing && (existing.sightings || []).some((s) => (s.context || "").trim() === ctx) || (existing && (existing.context || "").trim() === ctx));
       let saveBtn;
-      if (!existing) saveBtn = `<button class="btn sage" id="saveBtn">保存到生词本</button>`;
-      else if (ctx && !ctxKnown) saveBtn = `<button class="btn sage" id="appendBtn">＋ 添加此原句</button>`;
-      else saveBtn = `<button class="btn" id="openNbBtn">📖 已在生词本 · 打开</button>`;
+      if (!existing) saveBtn = `<button class="btn sage" id="saveBtn">Save to notebook</button>`;
+      else if (ctx && !ctxKnown) saveBtn = `<button class="btn sage" id="appendBtn">＋ Add this sentence</button>`;
+      else saveBtn = `<button class="btn" id="openNbBtn">📖 Already saved · open</button>`;
       const ctxCard = ctx ? contextCardHTML({ word: p.term || term, context: ctx, createdAt: now() }) : "";
-      box.innerHTML = `<div class="lookup-bar"><button class="btn" id="lkBack">← 生词本</button></div>`
+      box.innerHTML = `<div class="lookup-bar"><button class="btn" id="lkBack">← Notebook</button></div>`
         + ctxCard + cardHTML(p, { saveBtn, pending, meter: true, addExample: true });
       $("#lkBack").addEventListener("click", closeLookup);
       wireCard(box);
       wireExampleEditor(box, p, () => paint(pending));
       const sb = $("#saveBtn");
       if (sb) sb.addEventListener("click", () => {
-        if (ctx) p.source = "粘贴保存";
-        if (saveWord(p)) { toast(ctx ? "已保存 <b>" + esc(p.term) + "</b>(含原句)" : "已保存 <b>" + esc(p.term) + "</b>"); paint(false); refreshBadge(); }
-        else toast("已经在生词本里了");
+        if (ctx) p.source = "Paste & save";
+        if (saveWord(p)) { toast(ctx ? "Saved <b>" + esc(p.term) + "</b>(with its sentence)" : "Saved <b>" + esc(p.term) + "</b>"); paint(false); refreshBadge(); }
+        else toast("Already in your notebook");
       });
       const ob = $("#openNbBtn");
       if (ob) ob.addEventListener("click", () => { const w = findWord(term); if (w) openDetail(w.id); });
@@ -811,11 +1339,11 @@
       if (ab) ab.addEventListener("click", () => {
         const ws = getWords(); const rec = ws.find((w) => w.lookup === term);
         if (!rec) return;
-        rec.sightings = rec.sightings || (rec.context ? [{ context: rec.context, at: rec.createdAt || now(), source: "粘贴保存" }] : []);
-        rec.sightings.unshift({ context: ctx, at: now(), source: "粘贴保存" });
+        rec.sightings = rec.sightings || (rec.context ? [{ context: rec.context, at: rec.createdAt || now(), source: "Paste & save" }] : []);
+        rec.sightings.unshift({ context: ctx, at: now(), source: "Paste & save" });
         if (!rec.context) rec.context = ctx;
         rec.updatedAt = now(); setWords(ws); refreshBadge();
-        toast("已添加原句到 <b>" + esc(term) + "</b>");
+        toast("Sentence added to  <b>" + esc(term) + "</b>");
         paint(false);
       });
     };
@@ -833,34 +1361,35 @@
 
   // ---- NOTEBOOK ----
   let nbFilter = "all", nbScene = null, nbSort = "new", nbQuery = "", nbKind = "all", nbCtrlsOpen = false;
-  const NB_KINDS = [["all", "全部"], ["word", "单词"], ["phrase", "词组"], ["idiom", "习语"]];
-  // 单词 / 词组 / 习语 — a saved entry is an idiom when the curated idiom sets know
-  // it (or it is a figurative multi-word expression), a 词组 when it is any other
-  // multi-word entry, otherwise a plain 单词.
+  // SAME three buckets as Discover — 单词 / Phrasal verbs / Fixed expressions — from the same
+  // shared classifier, so a term carries one label everywhere it appears. The
+  // finer split (习语/介词短语/…) is the chip row below.
+  const NB_KINDS = [["all", "All"], ["word", "Words"], ["pv", "Phrasal verbs"], ["expr", "Fixed expressions"]];
   const _kindCache = new Map();
   function nbKindOf(w) {
     const t = norm(w.word || "");
     if (_kindCache.has(t)) return _kindCache.get(t);
-    let k = "word";
-    if (/\s/.test(t)) {
-      const idioms = window.LEXIS_IDIOM_SCENE || {};
-      const seedIdiom = (window.LEXIS_SEED_FLAT || []).some((s) => s.idiom && norm(s.term) === t);
-      k = (idioms[t] || seedIdiom) ? "idiom" : "phrase";
-    }
+    const k = window.lexisKindOf ? window.lexisKindOf(t) : (/\s/.test(t) ? "expr" : "word");
     _kindCache.set(t, k);
     return k;
   }
   // mastery status from the SRS state (mirrors the extension's masteryOf tiers)
   function masteryOfH5(w) {
     const s = w.srs || {};
-    if ((s.interval || 0) >= 21) return { key: "mastered", cn: "已掌握" };
-    if ((s.lapses || 0) >= 4) return { key: "leech", cn: "易忘" };
-    if ((s.reps || 0) >= 3) return { key: "familiar", cn: "熟悉" };
-    if ((s.reps || 0) >= 1) return { key: "learning", cn: "学习中" };
-    return { key: "new", cn: "新词" };
+    // Mastered also needs the word WRITTEN into several different sentences —
+    // spacing alone only shows you recognised it on schedule
+    const need = window.lexisProduceTarget ? window.lexisProduceTarget(w) : 0;
+    const done = window.lexisProduced ? window.lexisProduced(w) : 0;
+    const produced = need < 2 || done >= need;
+    if ((s.interval || 0) >= 21 && produced) return { key: "mastered", cn: "Mastered" };
+    if ((s.interval || 0) >= 21) return { key: "familiar", cn: `Familiar · produced  ${done}/${need}` };
+    if ((s.lapses || 0) >= 4) return { key: "leech", cn: "Tricky" };
+    if ((s.reps || 0) >= 3) return { key: "familiar", cn: "Familiar" };
+    if ((s.reps || 0) >= 1) return { key: "learning", cn: "Learning" };
+    return { key: "new", cn: "New" };
   }
   const NB_BAND_ORDER = { core: 0, "very-common": 1, common: 2, mid: 3, low: 4, rare: 5 };
-  const NB_SORTS = [["new", "最新保存"], ["freq", "词频"], ["due", "待复习"], ["az", "字母"]];
+  const NB_SORTS = [["new", "Recently saved"], ["freq", "Frequency"], ["due", "Due"], ["az", "A–Z"]];
   function nbSortList(list) {
     const l = list.slice();
     if (nbSort === "freq") {
@@ -877,32 +1406,33 @@
   }
   function renderNotebook() {
     const words = getWords();
-    const kindCounts = { all: words.length, word: 0, phrase: 0, idiom: 0 };
+    const kindCounts = { all: words.length, word: 0, pv: 0, expr: 0 };
     words.forEach((w) => { kindCounts[nbKindOf(w)]++; });
     view.innerHTML = `
       <div class="subtabs nb-only" id="nbkinds">
         ${NB_KINDS.map(([k, cn]) => `<button data-k="${k}" class="${nbKind === k ? "on" : ""}">${cn} ${kindCounts[k]}</button>`).join("")}
       </div>
       <div class="subtabs nb-only" id="nbtabs">
-        <button data-f="all" class="${nbFilter === "all" ? "on" : ""}">全部</button>
-        <button data-f="due" class="${nbFilter === "due" ? "on" : ""}">待复习 ${dueWords().length}</button>
-        <button data-f="learning" class="${nbFilter === "learning" ? "on" : ""}">学习中</button>
-        <button data-f="mastered" class="${nbFilter === "mastered" ? "on" : ""}">已掌握</button>
+        <button data-f="all" class="${nbFilter === "all" ? "on" : ""}">All</button>
+        <button data-f="due" class="${nbFilter === "due" ? "on" : ""}">due ${dueWords().length}</button>
+        <button data-f="learning" class="${nbFilter === "learning" ? "on" : ""}">Learning</button>
+        <button data-f="mastered" class="${nbFilter === "mastered" ? "on" : ""}">Mastered</button>
       </div>
       <form class="search" id="nbsearch" style="margin-bottom:10px">
-        <input id="nbq" placeholder="搜索生词本,或输入新词直接查…" value="${esc(nbQuery)}" autocomplete="off" autocapitalize="off" spellcheck="false">
-        <button class="btn icon" type="button" id="pasteBtn" title="从剪贴板粘贴查词">📋</button>
-        <button class="btn primary" type="submit">查</button>
+        <input id="nbq" placeholder="Search your notebook, or type a new word to look it up…" value="${esc(nbQuery)}" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="btn icon" type="button" id="pasteBtn" title="Paste from clipboard">📋</button>
+        <button class="btn primary" type="submit">Look up</button>
       </form>
       <div class="sortbar nb-only" id="nbsort">
-        <button class="catf ctrl-toggle" id="nbMore">筛选 · 排序 ▾</button>
-        <span class="ctrl-wrap">排序:${NB_SORTS.map(([k, cn]) =>
+        <button class="catf ctrl-toggle" id="nbMore">Filter · sort ▾</button>
+        <span class="ctrl-wrap">Sort: ${NB_SORTS.map(([k, cn]) =>
           `<button class="catf${nbSort === k ? " on" : ""}" data-s="${k}">${cn}</button>`).join("")}
-          <span class="muted" style="font-size:12px;flex-basis:100%">词后的标签是<b>词频</b>:极高频 / 高频 / 常用 / 中频 / 低频 / 生僻——越靠前越值得先掌握。</span>
+          <span class="muted" style="font-size:12px;flex-basis:100%">The tag after each word is its <b>frequency</b>: core / very common / common / mid / low / rare — the earlier, the more worth learning first.</span>
         </span>
       </div>
       <div id="result"></div>
       <div id="nbcats" class="ctrl-wrap nb-only"></div>
+      <span class="ctrl-wrap nb-only">${kindRuleHTML()}</span>
       <div id="nblist" class="nb-only"></div>`;
     view.querySelectorAll("#nbkinds button").forEach((b) => b.addEventListener("click", () => { nbKind = b.dataset.k; nbScene = null; renderNotebook(); }));
     view.querySelectorAll("#nbtabs button").forEach((b) => b.addEventListener("click", () => { nbFilter = b.dataset.f; renderNotebook(); }));
@@ -910,9 +1440,9 @@
     $("#nbMore").addEventListener("click", () => {
       nbCtrlsOpen = !nbCtrlsOpen;
       view.querySelectorAll(".ctrl-wrap").forEach((n) => n.classList.toggle("open", nbCtrlsOpen));
-      $("#nbMore").textContent = nbCtrlsOpen ? "收起 ▴" : "筛选 · 排序 ▾";
+      $("#nbMore").textContent = nbCtrlsOpen ? "Collapse ▴" : "Filter · sort ▾";
     });
-    if (nbCtrlsOpen) { view.querySelectorAll(".ctrl-wrap").forEach((n) => n.classList.add("open")); $("#nbMore").textContent = "收起 ▴"; }
+    if (nbCtrlsOpen) { view.querySelectorAll(".ctrl-wrap").forEach((n) => n.classList.add("open")); $("#nbMore").textContent = "Collapse ▴"; }
     view.querySelectorAll("#nbsort [data-s]").forEach((b) => b.addEventListener("click", () => { nbSort = b.dataset.s; renderNotebook(); }));
     $("#nbsearch").addEventListener("submit", (e) => {
       e.preventDefault();
@@ -952,20 +1482,28 @@
       const box = $("#nblist");
       if (!list.length) {
         box.innerHTML = q
-          ? `<div class="empty"><div class="big">🔍</div>生词本里没有「${esc(q)}」。<div class="row" style="justify-content:center;margin-top:12px"><button class="btn primary" id="nbLookup">查一下「${esc(q)}」</button></div></div>`
-          : `<div class="empty"><div class="big">📖</div>${nbScene ? "这个分类下暂无生词,点「全部」。" : "还没有生词。去「查词」保存几个吧。"}</div>`;
+          ? `<div class="empty"><div class="big">🔍</div>No “${esc(q)}」。<div class="row" style="justify-content:center;margin-top:12px"><button class="btn primary" id="nbLookup">Look up “${esc(q)}」</button></div></div>`
+          : `<div class="empty"><div class="big">📖</div>${nbScene ? "Nothing in this category — press All." : "No words yet. Look one up and save it."}</div>`;
         const nl = $("#nbLookup");
         if (nl) nl.addEventListener("click", () => doLookup(q));
         return;
       }
-      box.innerHTML = list.map((w) => {
+      box.innerHTML = list.map((w0) => {
+        const w = asShown(w0);          // 全英模式:这一行也不该冒出中文
         const d = w.data || {};
         const m = masteryOfH5(w);
-        const dueIn = w.srs && w.srs.due > now() ? "下次 " + intervalLabel(Math.round((w.srs.due - now()) / DAY)) : "待复习";
+        const dueIn = w.srs && w.srs.due > now() ? "next " + intervalLabel(Math.round((w.srs.due - now()) / DAY)) : "due";
         // the old status dot said nothing useful — the frequency band does
-        const tag = w.status === "notfound" ? `<span class="mfreq nf">未找到</span>` : freqChip(d.freq);
+        // a composed entry is not a broken one — say "composed", and show the
+        // pattern gloss rather than an empty second line
+        const cbd = (!((d.meanings || []).length) && window.lexisTermBreakdown)
+          ? window.lexisTermBreakdown(w.word, d.partGlosses) : null;
+        const composed = (cbd && window.lexisBreakdownUseful(cbd))
+          ? ((cbd.gloss && cbd.gloss.en) || (cbd.parts.find((x) => x.definition) || {}).definition || "") : "";
+        const tag = w.status === "notfound"
+          ? `<span class="mfreq nf">${composed ? "composed" : "not found"}</span>` : freqChip(d.freq);
         return `<div class="item" data-open="${w.id}">
-          <div style="min-width:0"><div class="w serif">${esc(w.word)} ${tag} <span class="mstat m-${m.key}">${m.cn}</span></div><div class="meta">${esc(d.cn || ((d.meanings || [])[0] && d.meanings[0].definition) || "")}</div></div>
+          <div style="min-width:0"><div class="w serif">${esc(w.word)} ${tag} <span class="mstat m-${m.key}">${m.cn}</span></div><div class="meta">${esc(d.cn || ((d.meanings || [])[0] && d.meanings[0].definition) || composed || "")}</div></div>
           <span class="st chip">${dueIn}</span></div>`;
       }).join("");
       box.querySelectorAll("[data-open]").forEach((n) => n.addEventListener("click", () => openDetail(n.dataset.open)));
@@ -1013,7 +1551,7 @@
     opts = opts || {};
     if (_sweeping || (getSettings().autoEnrich === false && !opts.manual)) return 0;
     const todo = incompleteWords().slice(0, opts.manual ? 40 : SWEEP_BATCH);
-    if (!todo.length) { if (opts.manual) toast("生词本里的内容都是完整的 ✓"); return 0; }
+    if (!todo.length) { if (opts.manual) toast("Every entry in your notebook is complete ✓"); return 0; }
     _sweeping = true;
     let fixed = 0;
     try {
@@ -1044,30 +1582,39 @@
     const fmt = (at) => { try { const d = new Date(at); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); } catch (e) { return ""; } };
     const rows = list.map((s) => {
       const meta = [s.source, s.at ? fmt(s.at) : ""].filter(Boolean).join(" · ");
-      return `<div class="ex">${hi(s.context)}${meta ? `<div class="src">来源:${esc(meta)}</div>` : ""}</div>`;
+      return `<div class="ex">${hi(s.context)}${meta ? `<div class="src">source: ${esc(meta)}</div>` : ""}</div>`;
     }).join("");
-    return `<div class="card"><h2 class="sec">原句语境${list.length > 1 ? ` · ${list.length}` : ""}</h2>${rows}</div>`;
+    return `<div class="card"><h2 class="sec">Original context${list.length > 1 ? ` · ${list.length}` : ""}</h2>${rows}</div>`;
   }
 
-  // 掌握进度 — the SRS state the review engine already tracks, made visible
+  // Mastery — the SRS state the review engine already tracks, made visible
   function masteryCardHTML(w) {
     const s = w.srs || {};
     const iv = s.interval || 0;
-    const pct = Math.min(100, Math.round((iv / 21) * 100)); // 21 天间隔 = 判定已掌握
-    const next = s.due ? (s.due <= now() ? "现在" : intervalLabel(Math.max(1, Math.round((s.due - now()) / DAY)))) : "现在";
-    return `<div class="card"><h2 class="sec">掌握进度</h2>
+    const pct = Math.min(100, Math.round((iv / 21) * 100)); // 21 天间隔 = 判定Mastered
+    const next = s.due ? (s.due <= now() ? "now" : intervalLabel(Math.max(1, Math.round((s.due - now()) / DAY)))) : "now";
+    return `<div class="card"><h2 class="sec">Mastery</h2>
       <div class="meter"><i style="width:${pct}%"></i></div>
-      <div class="muted" style="font-size:12px">连续答对 <b>${s.reps || 0}</b> 次 · 当前间隔 <b>${iv ? iv + " 天" : "未开始"}</b> · 下次复习 <b>${esc(next)}</b>${s.lapses ? ` · 曾卡壳 ${s.lapses} 次` : ""}</div>
+      <div class="muted" style="font-size:12px"><b>${s.reps || 0}</b> correct in a row · interval <b>${iv ? iv + "d" : "not started"}</b> · next review <b>${esc(next)}</b>${s.lapses ? ` · lapsed ${s.lapses}×` : ""}</div>
     </div>`;
   }
   // a saved word is "thin" if the look-up sections it should have are missing —
   // this is what triggers the silent 自动增补 when you open it.
   function needsSupplement(w) {
     const d = w.data || {};
+    // A notebook KEEPS things. Once an entry has what an entry needs it is
+    // settled and nothing re-queries it on its own — only the explicit 增补 /
+    // Re-fetch button does. Before this, opening a word could kick off another
+    // round of fetches every time, which is why definitions kept "needing" a
+    // re-query and why a source having a bad minute could blank a good entry.
+    if (d.done) return false;
+    // a term no dictionary lists, but that HAS its breakdown, is finished too —
+    // re-querying it next week cannot produce an entry that doesn't exist
+    if (!(d.meanings || []).length && d.partGlosses && Object.keys(d.partGlosses).length) return false;
     if (!d.freq && !d.freqTried) return true;
     if (!(d.meanings || []).length) return true;
     if (!(d.examples || []).length) return true;
-    if (getSettings().chinese && !(d.examples || []).some((e) => e.translation)) return true;
+    if (wantCnNow() && !(d.examples || []).some((e) => e.translation)) return true;
     if (!(d.collocations || []).length && !(d.synonymsRich || []).length) return true;
     return false;
   }
@@ -1081,10 +1628,10 @@
     _supplemented.add(id);
     const w = getWords().find((x) => x.id === id);
     if (!w) return;
-    if (manual) toast("正在增补…");
+    if (manual) toast("Topping up……");
     const p = await lookupFull(w.word);
     const changed = mergeIntoWord(id, p);
-    if (manual) toast(changed ? "已增补 ✓" : "没有可增补的新内容");
+    if (manual) toast(changed ? "Topped up ✓" : "Nothing new to add");
     if (current === "notebook") { if ($("#det")) openDetail(id); }
   }
 
@@ -1094,22 +1641,22 @@
     document.body.classList.remove("looking");
     const auto = getSettings().autoEnrich !== false && !_supplemented.has(id) && needsSupplement(w);
     view.innerHTML = `<div class="row" style="margin-bottom:12px">
-        <button class="btn" id="back">← 返回</button>
-        <button class="btn" id="sup" style="margin-left:auto">${auto ? "增补中…" : "增补"}</button>
-        <button class="btn" id="edit">编辑</button>
-        <button class="btn" id="del">删除</button>
+        <button class="btn" id="back">← Back</button>
+        <button class="btn" id="sup" style="margin-left:auto">${auto ? "Topping up…" : "Top up"}</button>
+        <button class="btn" id="edit">Edit</button>
+        <button class="btn" id="del">Delete</button>
       </div><div id="det"></div>`;
     const isMastered = masteryOfH5(w).key === "mastered";
     const prev = wordToPreview(w);
     $("#det").innerHTML = cardHTML(prev, { examples: getSettings().showExamples, meter: true, pending: auto, addExample: true })
       + contextCardHTML(w) + masteryCardHTML(w)
-      + `<div class="card"><h2 class="sec">操作</h2><div class="row">
-          <button class="btn" id="revNow">立即复习</button>
-          <button class="btn ${isMastered ? "" : "sage"}" id="tglMaster">${isMastered ? "取消已掌握" : "标为已掌握"}</button>
-          <button class="btn" id="resetProg">重置进度</button>
+      + `<div class="card"><h2 class="sec">Actions</h2><div class="row">
+          <button class="btn" id="revNow">Review now</button>
+          <button class="btn ${isMastered ? "" : "sage"}" id="tglMaster">${isMastered ? "Unmark known" : "Mark as known"}</button>
+          <button class="btn" id="resetProg">Reset progress</button>
         </div></div>`;
     wireCard($("#det"));
-    // 我的例句 edits write straight through to the saved word
+    // My sentences edits write straight through to the saved word
     wireExampleEditor($("#det"), prev, () => {
       const ws = getWords(); const rec = ws.find((x) => x.id === id);
       if (!rec) return;
@@ -1129,13 +1676,13 @@
         ? { due: now(), interval: 0, ease: s.ease || 2.5, reps: 0, lapses: s.lapses || 0, last: now() }
         : { due: now() + 30 * DAY, interval: 30, ease: s.ease || 2.5, reps: Math.max(s.reps || 0, 3), lapses: s.lapses || 0, last: now() });
       const before = JSON.parse(JSON.stringify((getWords().find((x) => x.id === id) || {}).srs || {}));
-      toast(isMastered ? "已取消已掌握" : "已标为已掌握", () => { patchSrs(() => before); openDetail(id); });
+      toast(isMastered ? "Unmarked" : "Marked as known", () => { patchSrs(() => before); openDetail(id); });
       openDetail(id);
     });
     $("#resetProg").addEventListener("click", () => {
       const prevSrs = JSON.parse(JSON.stringify(w.srs || {}));
       patchSrs(() => ({ due: now(), interval: 0, ease: 2.5, reps: 0, lapses: 0, last: 0 }));
-      toast("进度已重置", () => { patchSrs(() => prevSrs); openDetail(id); });
+      toast("Progress reset", () => { patchSrs(() => prevSrs); openDetail(id); });
       openDetail(id);
     });
     $("#sup").addEventListener("click", () => supplement(id, true));
@@ -1144,16 +1691,16 @@
     $("#del").addEventListener("click", () => {
       const snapshot = getWords().find((x) => x.id === id);
       removeWord(id); go("notebook"); refreshBadge();
-      toast("已删除 <b>" + esc(w.word) + "</b>", () => {
+      toast("Deleted <b>" + esc(w.word) + "</b>", () => {
         const ws = getWords();
-        if (!ws.some((x) => x.id === id)) { ws.unshift(snapshot); setWords(ws); }
-        toast("已恢复"); refreshBadge(); openDetail(id);
+        if (!ws.some((x) => x.id === id)) { snapshot.updatedAt = now(); ws.unshift(snapshot); untombstone(snapshot); setWords(ws); }
+        toast("Restored"); refreshBadge(); openDetail(id);
       });
     });
     $("#edit").addEventListener("click", async () => {
-      const next = cleanTerm(prompt("修改词条：", w.word) || "");
+      const next = cleanTerm(prompt("Edit entry:", w.word) || "");
       if (!next || next === w.word) return;
-      toast("正在重新查询…");
+      toast("Re-querying……");
       const p = await lookupFull(next);       // refetch meanings + examples for the new term
       const words = getWords();
       const rec = words.find((x) => x.id === id);
@@ -1170,7 +1717,7 @@
       });
       setWords(words);
       _supplemented.delete(id);
-      toast("已更新");
+      toast("Updated");
       openDetail(id);
     });
   }
@@ -1184,31 +1731,12 @@
   let session = null;
   let revScope = "all";        // all | phrase — 短语/习语 have their own queue
   let revFine = false;         // show the 4-level grade bar instead of 不会/会了
-  const REV_SCOPES = [["all", "全部"], ["phrase", "只练短语 / 习语"]];
+  const REV_SCOPES = [["all", "All"], ["phrase", "Phrases & idioms only"]];
 
   const isChunk = (w) => /\s/.test((w.word || "").trim());
   function scopedDue() {
     const due = dueWords();
     return revScope === "phrase" ? due.filter(isChunk) : due;
-  }
-  // pick a sentence we can blank the target out of: your own example first, then a
-  // fetched one, then the original sentence you captured it in.
-  function clozeFor(w) {
-    const d = w.data || {};
-    const cands = [].concat(d.userExamples || [], d.examples || [],
-      (w.context || "").trim() ? [{ text: w.context, translation: "" }] : []);
-    const head = (w.word || "").trim();
-    if (!head) return null;
-    const first = head.split(/\s*\/\s*/)[0];
-    let re;
-    try { re = new RegExp("\\b" + first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+") + "\\w*", "i"); }
-    catch (e) { return null; }
-    for (const c of cands) {
-      const t = (c.text || "").trim();
-      if (!t || !re.test(t)) continue;
-      return { blanked: t.replace(re, "____"), answer: t.match(re)[0], full: t, cn: c.translation || "" };
-    }
-    return null;
   }
   const normAns = (s2) => String(s2 || "").toLowerCase().replace(/[^a-z' ]/g, "").replace(/\s+/g, " ").trim();
   // Accept inflected forms — typing "going on" for "go on" is knowing the chunk,
@@ -1266,20 +1794,20 @@
     const est = Math.max(1, Math.round(Math.min(due.length, goal - doneToday || due.length) * 0.25));
     view.innerHTML = scopeBar + `
       <div class="card rev-home">
-        <div class="rev-streak">${st.streak > 0 ? `🔥 连续 <b>${st.streak}</b> 天` : "今天开个头"}</div>
+        <div class="rev-streak">${st.streak > 0 ? `🔥 <b>${st.streak}</b>-day streak` : "Start today off"}</div>
         <div class="stat" style="font-size:34px">${due.length}</div>
-        <div class="muted">个待复习 · 其中 ${chunks} 个是短语/习语</div>
+        <div class="muted"> due · including  ${chunks}  of them phrases or idioms</div>
         <div class="meter"><i style="width:${pct}%"></i></div>
-        <div class="muted" style="font-size:12px">今日 ${doneToday} / ${goal} · 大约 ${est} 分钟能做完</div>
+        <div class="muted" style="font-size:12px">today ${doneToday} / ${goal} · about ${est} min</div>
         ${due.length ? `<div class="row" style="margin-top:16px">
-            <button class="btn primary" id="revStart" style="flex:1;padding:15px;font-size:16px">开始复习</button>
+            <button class="btn primary" id="revStart" style="flex:1;padding:15px;font-size:16px">Start review</button>
           </div>
           <div class="row" style="margin-top:8px;justify-content:center">
-            ${[10, 20, 0].map((n) => `<button class="catf" data-len="${n}">${n ? n + " 个" : "全部"}</button>`).join("")}
+            ${[10, 20, 0].map((n) => `<button class="catf" data-len="${n}">${n ? n + "" : "All"}</button>`).join("")}
           </div>`
-          : `<div class="muted" style="margin-top:16px">✅ ${revScope === "phrase" ? "没有到期的短语/习语。" : "都复习完了,明天见。"}</div>`}
+          : `<div class="muted" style="margin-top:16px">✅ ${revScope === "phrase" ? "No phrases or idioms due." : "All done for today."}</div>`}
       </div>
-      ${doneToday ? `<div class="card"><h2 class="sec">今天</h2><div class="muted" style="font-size:13px">已复习 <b>${doneToday}</b> 个${doneToday >= goal ? " · 目标达成 🎉" : ` · 还差 ${goal - doneToday} 个`}</div></div>` : ""}`;
+      ${doneToday ? `<div class="card"><h2 class="sec">Today</h2><div class="muted" style="font-size:13px">reviewed <b>${doneToday}</b>${doneToday >= goal ? " · goal reached 🎉" : ` · ${goal - doneToday} to go`}</div></div>` : ""}`;
     wireScope();
     const start = $("#revStart");
     if (start) {
@@ -1297,58 +1825,131 @@
       revScope = b.dataset.rs; session = null; renderReview();
     }));
   }
+  // ---- one drill per card, built once so a redraw doesn't reshuffle it -----
+  function currentDrill(w) {
+    if (session.drill && session.drillFor === w.id) return session.drill;
+    const s2 = getSettings();
+    const force = s2.reviewDrill && s2.reviewDrill !== "auto" ? s2.reviewDrill : null;
+    session.drill = window.lexisBuildDrill
+      ? window.lexisBuildDrill(w, getWords(), { force, lang: enOnly() ? "en" : "cn",
+          seed: ((w.srs && w.srs.reps) || 0) + session.done + 1 })
+      : { mode: "recall" };
+    if (enOnly()) session.drill = stripCn(session.drill);
+    session.drillFor = w.id;
+    return session.drill;
+  }
+  const DRILL_HINT_CN = {
+    sense: "Which of these is it, here??",
+    word: "Which word fits this sentence??",
+    cloze: "Write it into the gap.",
+    zh2en: "From the meaning alone, write the word.",
+    dict: "Listen, then write what you hear.",
+    recall: "Think first, then reveal.",
+  };
+  const DRILL_HINT_EN = {
+    sense: "Which of these is it, here?",
+    word: "Which word fits this sentence?",
+    cloze: "Write it into the gap.",
+    zh2en: "From the meaning alone, write the word.",
+    dict: "Listen, then write what you hear.",
+    recall: "Think first, then reveal.",
+  };
+  // in 全英 mode the card's own wording is English too
+  const RV_T = () => (enOnly()
+    ? { hint: DRILL_HINT_EN, prod: (a, b) => `used in ${a}/${b} sentences`, origin: (g) => `Your saved sentence meant: <b>${g}</b> — try it in another one`,
+        mine: "my sentence", ctx: "the sentence you saved it from", check: "Check", reveal: "Show meaning",
+        ok: "✓ correct", no: "✗ look again" }
+    : { hint: DRILL_HINT_EN, prod: (a, b) => `used in ${a}/${b} sentences`, origin: (g) => `Your saved sentence meant: <b>${g}</b> — try it in another one`,
+        mine: "My sentences", ctx: "the sentence you saved it from", check: "Check", reveal: "Show meaning",
+        ok: "✓ correct", no: "✗ look again" });
   function drawCard() {
     const w = session.queue[0];
     if (!w) {
       const n = session.total;
       session = null; refreshBadge();
       renderReview();
-      toast(`🎉 本轮完成 · ${n} 个`);
+      toast(`🎉 Round complete · ${n}`);
       return;
     }
     const pct = Math.round((session.done / session.total) * 100);
-    const d = w.data || {};
+    const dr = currentDrill(w);          // built from the real record…
+    const d = (asShown(w) || {}).data || {};   // …displayed through the language filter
     const back = session.showBack;
-    const cz = clozeFor(w);
     const scopeBar = `<div class="subtabs" id="revscope">${REV_SCOPES.map(([k, cn]) =>
       `<button data-rs="${k}" class="${revScope === k ? "on" : ""}">${cn}</button>`).join("")}</div>`;
-    // productive prompt: the sentence with the target removed + its Chinese
-    const front = cz
-      ? `<div class="cloze">${esc(cz.blanked)}</div>
-         ${cz.cn ? `<div class="muted" style="font-size:13px;margin-top:8px">${esc(cz.cn)}</div>` : ""}
-         ${d.cn ? `<div class="cn-gloss" style="font-size:14px">${esc(d.cn)}</div>` : ""}
-         <input id="czin" class="cloze-in" placeholder="填进去试试(可跳过)" autocomplete="off" autocapitalize="off" spellcheck="false">`
-      : `<div class="hw serif">${esc(w.word)}</div>
-         ${d.phonetic ? `<div class="phon">${esc(d.phonetic)}</div>` : ""}
-         <div class="muted" style="margin-top:14px">想想它的意思</div>`;
+
+    const T = RV_T();
+    const need = dr.target > 1
+      ? `<span class="rv-prod${dr.produced >= dr.target ? " ok" : ""}">${T.prod(Math.min(dr.produced, dr.target), dr.target)}</span>` : "";
+    // your saved sentence is often a poor example, but it does say which sense
+    // you cared about — name that, then drill a different sentence
+    const os = dr.mode !== "sense" && dr.originSense && dr.originSense.confident && dr.originSense.meaning;
+    const head = `<div class="rv-mode"><span class="rv-mode-t">${esc(dr.label || "")}</span>${need}</div>` +
+      (os && dr.source !== "context"
+        ? `<div class="rv-origin">${T.origin(esc(enOnly() ? (os.definition || os.cn || "") : (os.cn || os.definition || "")))}</div>` : "");
+
+    const hi = (t) => esc(t).replace(new RegExp("(" + (w.word || "").split(/\s*\/\s*/)[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+") + "\\w*)", "i"), "<mark>$1</mark>");
+    const blank = (extra) => `<input id="czin" class="cz-in" ${extra || ""} autocomplete="off" autocapitalize="off" spellcheck="false">`;
+    const optsHTML = (list) => `<div class="rv-opts">${(list || []).map((o, i) => `<button class="rv-opt" data-opt="${i}">${esc(o)}</button>`).join("")}</div>`;
+    let front;
+    if (dr.mode === "sense") {
+      front = (dr.sentence ? `<div class="rv-sent">${hi(dr.sentence.text)}</div>` : `<div class="hw serif">${esc(w.word)}</div>`) + optsHTML(dr.options);
+    } else if (dr.mode === "word") {
+      front = `<div class="rv-sent">${esc(dr.pre)}<span class="cz-gap">?</span>${esc(dr.post)}</div>
+        ${dr.sentenceCn ? `<div class="muted" style="font-size:13px;margin-top:8px">${esc(dr.sentenceCn)}</div>` : ""}` + optsHTML(dr.options);
+    } else if (dr.mode === "zh2en") {
+      front = `<div class="rv-zh">${esc(dr.zh)}</div>
+        <div class="rv-sent">${blank(`style="width:${Math.max(7, (dr.answer || "").length + 3)}ch" placeholder="${esc(dr.initial)}…"`)}</div>`;
+    } else if (dr.mode === "dict") {
+      front = `<button class="speak" id="rspk" style="font-size:30px">🔊</button>
+        <div class="rv-sent">${blank(`style="width:${Math.max(7, (dr.answer || "").length + 3)}ch"`)}</div>`;
+    } else if (dr.mode === "cloze" && dr.pre !== undefined) {
+      // the box sits IN the gap, not underneath the sentence
+      front = `<div class="rv-sent">${esc(dr.pre)}${blank(`style="width:${Math.max(6, (dr.answer || "").length + 2)}ch"`)}${esc(dr.post)}</div>
+        ${dr.sentenceCn ? `<div class="muted" style="font-size:13px;margin-top:8px">${esc(dr.sentenceCn)}</div>` : ""}
+        ${d.cn && !dr.sentenceCn ? `<div class="cn-gloss" style="font-size:14px">${esc(d.cn)}</div>` : ""}
+        ${dr.source === "mine" ? `<div class="rv-src">${T.mine}</div>` : dr.source === "context" ? `<div class="rv-src">${T.ctx}</div>` : ""}`;
+    } else {
+      front = `<div class="hw serif">${esc(w.word)}</div>
+        ${d.phonetic ? `<div class="phon">${esc(d.phonetic)}</div>` : ""}`;
+    }
+    front += `<div class="muted" style="margin-top:16px;font-size:12px">${T.hint[dr.mode] || ""}</div>`;
+
+    const full = dr.sentence ? dr.sentence.text : (dr.pre !== undefined ? dr.pre + dr.answer + dr.post : (dr.full || ""));
     const answer = `<hr class="hr">
       <div class="hw serif">${esc(w.word)}</div>
       ${d.phonetic ? `<div class="phon">${esc(d.phonetic)}</div>` : ""}
       <button class="speak" id="rspk" style="font-size:26px">🔊</button>
       ${d.cn ? `<div class="cn-gloss">${esc(d.cn)}</div>` : ""}
       ${(d.meanings || []).slice(0, 2).map((m) => `<div class="mean" style="text-align:left">${m.pos ? `<span class="pos">${esc(m.pos)}</span> ` : ""}${esc(m.definition)}${m.cn ? `<div class="cn">${esc(m.cn)}</div>` : ""}</div>`).join("")}
-      ${cz ? `<div class="ex" style="text-align:left">${esc(cz.full)}${cz.cn ? `<div class="tr">${esc(cz.cn)}</div>` : ""}</div>`
-           : (d.examples || []).slice(0, 1).map((e) => `<div class="ex" style="text-align:left">${esc(e.text)}${e.translation ? `<div class="tr">${esc(e.translation)}</div>` : ""}</div>`).join("")}`;
+      ${full ? `<div class="ex" style="text-align:left">${hi(full)}${(dr.sentenceCn || (dr.sentence && dr.sentence.cn)) ? `<div class="tr">${esc(dr.sentenceCn || dr.sentence.cn)}</div>` : ""}</div>` : ""}`;
+
+    const mcq = dr.mode === "sense" || dr.mode === "word";
     view.innerHTML = scopeBar + `
       <div class="progress"><i style="width:${pct}%"></i></div>
       <div class="card rev-card">
-        ${back ? (cz ? `<div class="cloze">${esc(cz.blanked)}</div>` : "") + answer : front}
-        ${back && session.verdict ? `<div class="verdict ${session.verdict}">${session.verdict === "ok" ? "✓ 答对了" : "✗ 再看一遍"}</div>` : ""}
+        ${head}
+        ${back ? answer : front}
+        ${back && session.verdict ? `<div class="verdict ${session.verdict}">${session.verdict === "ok" ? T.ok : T.no}</div>` : ""}
       </div>
-      ${back ? gradeBar(w) : `<button class="btn primary" id="flip" style="width:100%;padding:14px">${cz ? "对答案" : "显示释义"}</button>`}`;
+      ${back ? gradeBar(w) : (mcq ? "" : `<button class="btn primary" id="flip" style="width:100%;padding:14px">${dr.mode === "recall" ? T.reveal : T.check}</button>`)}`;
     wireScope();
     const spk = $("#rspk");
     if (spk) spk.addEventListener("click", () => speak(w.word, d.audioUs));
+    if (dr.mode === "dict" && !back && spk) setTimeout(() => spk.click(), 300);
     if (!back) {
       const inp = $("#czin");
       const reveal = () => {
-        if (inp && cz) {
-          const v = normAns(inp.value);
-          if (v) session.verdict = answerMatches(inp.value, cz.answer, w.word) ? "ok" : "no";
-        }
+        if (inp && dr.answer && normAns(inp.value)) session.verdict = answerMatches(inp.value, dr.answer, w.word) ? "ok" : "no";
         session.showBack = true; drawCard();
       };
-      $("#flip").addEventListener("click", reveal);
+      const flip = $("#flip");
+      if (flip) flip.addEventListener("click", reveal);
+      // on a multiple-choice card the tap IS the answer
+      view.querySelectorAll("[data-opt]").forEach((b) => b.addEventListener("click", () => {
+        session.verdict = String((dr.options || [])[+b.dataset.opt]) === String(dr.answer) ? "ok" : "no";
+        session.showBack = true; drawCard();
+      }));
       if (inp) { inp.focus(); inp.addEventListener("keydown", (e) => { if (e.key === "Enter") reveal(); }); }
     } else {
       view.querySelectorAll("[data-grade]").forEach((b) => b.addEventListener("click", () => grade(w, b.dataset.grade)));
@@ -1358,33 +1959,43 @@
   }
   // Two big targets by default (thumb-friendly); the 4-level SRS bar is one tap away.
   function gradeBar(w) {
+    const en = enOnly();
     if (!revFine) return `<div class="rev-two">
-      <button class="btn big-no" data-grade="again">不会<span class="d">10 分钟后再来</span></button>
-      <button class="btn big-yes" data-grade="good">会了<span class="d">${intervalLabel(schedule(w.srs, "good").interval)}</span></button>
-      <button class="linklike" id="revFine">更细的评分 ▾</button>
+      <button class="btn big-no" data-grade="again">Don't know<span class="d">back in 10 min</span></button>
+      <button class="btn big-yes" data-grade="good">Got it<span class="d">${intervalLabel(schedule(w.srs, "good").interval)}</span></button>
+      <button class="linklike" id="revFine">${en ? "finer grades ▾" : "finer grades ▾"}</button>
     </div>`;
     const g = (k, label) => { const days = schedule(w.srs, k).interval || 10 / 1440; return `<button class="btn" data-grade="${k}">${label}<span class="d">${intervalLabel(days)}</span></button>`; };
     return `<div class="rev-actions">
-        <button class="btn" data-grade="again" style="color:#c05a5a">重来<span class="d">10 分钟</span></button>
-        ${g("hard", "困难")}${g("good", "记得")}
-        <button class="btn sage" data-grade="easy">简单<span class="d">${intervalLabel(schedule(w.srs, "easy").interval)}</span></button>
+        <button class="btn" data-grade="again" style="color:#c05a5a">Again<span class="d">10 min</span></button>
+        ${g("hard", "Hard")}${g("good", "Good")}
+        <button class="btn sage" data-grade="easy">Easy<span class="d">${intervalLabel(schedule(w.srs, "easy").interval)}</span></button>
       </div>
-      <div class="row" style="justify-content:center"><button class="linklike" id="revFine">收起 ▴</button></div>`;
+      <div class="row" style="justify-content:center"><button class="linklike" id="revFine">Collapse ▴</button></div>`;
   }
   function grade(w, g) {
     const words = getWords();
     const rec = words.find((x) => x.id === w.id);
-    if (rec) { rec.srs = schedule(rec.srs, g); rec.updatedAt = now(); setWords(words); }
+    if (rec) {
+      rec.srs = schedule(rec.srs, g);
+      // "会了" on a productive drill counts as producing the word in THAT
+      // sentence; Mastered needs several different ones
+      if (window.lexisMarkDrill && session.drill) {
+        window.lexisMarkDrill(rec, session.drill, g !== "again" && session.verdict !== "no");
+      }
+      rec.updatedAt = now(); setWords(words);
+    }
     session.queue.shift();
     if (g === "again" && rec) session.queue.push(rec); // re-show at end
     else bumpRevStats();
     session.done += 1; session.showBack = false; session.verdict = null;
+    session.drill = null; session.drillFor = null;
     drawCard();
   }
 
   // ---- DISCOVER (offline study lists from vocab.js) ----
-  let dTab = "words", dCursor = { words: 0, phrases: 0, pv: 0, idioms: 0 };
-  let dScene = { words: null, phrases: null, pv: null, idioms: null }; // active filter per tab
+  let dTab = "words", dCursor = { words: 0, phrases: 0, pv: 0 };
+  let dScene = { words: null, phrases: null, pv: null }; // active filter per tab
   const PAGE = 12;
   // usage-scene of a term, memoized. kind = "words"|"phrases"|"idioms" (Discover)
   // or "wordNb" for a notebook entry (guesses word vs phrase/idiom by spaces).
@@ -1394,7 +2005,7 @@
     if (_sceneCacheH5.has(ck)) return _sceneCacheH5.get(ck);
     let out = null;
     try {
-      // 短语 are classified by their SHAPE (语法结构/短语动词/介词短语/连接·语篇/固定表达),
+      // 短语 are classified by their SHAPE (语法结构/Phrasal verbs/介词短语/连接·语篇/Fixed expressions),
       // not by topic — "have to" and "such as" aren't about a subject, and the
       // shape is what tells you how to produce them.
       if (kind === "pv") { _sceneCacheH5.set(ck, null); return null; }   // ranked by frequency only
@@ -1404,8 +2015,9 @@
         _sceneCacheH5.set(ck, out); return out;
       }
       if (kind === "wordNb") {
+        // same level-2 labels Discover uses for a chunk; usage scene for a word
         out = /\s/.test(String(term).trim())
-          ? (sceneOfH5(term, "idioms") || sceneOfH5(term, "phrases"))
+          ? sceneOfH5(term, "phrases")
           : sceneOfH5(term, "words");
         _sceneCacheH5.set(ck, out); return out;
       }
@@ -1435,12 +2047,12 @@
   // attr = data-attribute name for the chip (dscene / nbscene).
   function catBarH5(items, kind, active, attr) {
     const counts = new Map();
-    items.forEach((t) => { const k = sceneOfH5(t, kind); const key = k ? k.key : "_other", cn = k ? k.cn : "其他";
+    items.forEach((t) => { const k = sceneOfH5(t, kind); const key = k ? k.key : "_other", cn = k ? k.cn : "other";
       if (!counts.has(key)) counts.set(key, { cn, n: 0 }); counts.get(key).n++; });
     if (counts.size <= 1 && counts.has("_other")) return "";
     const chip = (key, cn, n, on, muted) =>
       `<button class="catf${on ? " on" : ""}${muted ? " muted" : ""}" ${attr}="${esc(key)}">${esc(cn)} <b>${n}</b></button>`;
-    const chips = [chip("__all__", "全部", items.length, !active, false)];
+    const chips = [chip("__all__", "All", items.length, !active, false)];
     // 20 scenes is 3 rows of chips on a phone. Show the 6 biggest (plus whichever
     // one is active) and hide the tail behind 更多 — the long tail is rarely what
     // you want and it pushed the actual list below the fold.
@@ -1451,7 +2063,7 @@
     });
     const restN = sorted.length - Math.min(HEAD, sorted.length);
     const rest = restN > 0
-      ? `<button class="catf more" ${attr}="__more__">更多 ${restN} 类 ▾</button>` +
+      ? `<button class="catf more" ${attr}="__more__">${restN} more ▾</button>` +
         `<span class="catmore">${sorted.slice(HEAD).filter(([k]) => k !== active)
           .map(([key, v]) => chip(key, v.cn, v.n, false, key === "_other")).join("")}</span>`
       : "";
@@ -1513,59 +2125,69 @@
       // stable sort → still frequency-ordered inside each band
       return pool.slice().sort((a2, b2) => (rk.has(a2.band) ? rk.get(a2.band) : 99) - (rk.has(b2.band) ? rk.get(b2.band) : 99)).map(term);
     }
+    // Fixed expressions = every multiword chunk that is NOT a phrasal verb, idioms folded
+    // in; Phrasal verbs = all of them, in one place. The two lists used to share 51
+    // identical terms, which is why the tabs felt like the same thing.
     if (kind === "phrases") {
-      // The PHRASE List (498 non-transparent multiword expressions, Martinez &
-      // Schmitt) first, in corpus-frequency order — these are the chunks behind
-      // "I know the words but can't say it" — then the curated collocations.
-      const pl = (window.LEXIS_PHRASE_LIST || []).map((x) => x.term);
-      const seed = (window.LEXIS_PHRASE_SEED_FLAT || []).map(term);
-      const seen = new Set();
-      const all = pl.concat(seed).filter((t) => {
-        const k = norm(t);
-        if (!k || known.has(k) || seen.has(k)) return false;
-        seen.add(k); return true;
-      });
+      const all = (window.LEXIS_EXPR_ALL || []).filter((t) => !known.has(norm(t)));
       return all.slice(chunkFrontier("phrase", all.length));
     }
     if (kind === "pv") {
-      const pool = (window.LEXIS_PHAVE_LIST || []).map((x) => x.term).filter((t) => !known.has(norm(t)));
+      const pool = (window.LEXIS_PV_ALL || []).filter((t) => !known.has(norm(t)));
       return pool.slice(chunkFrontier("pv", pool.length));
-    }
-    if (kind === "idioms") {
-      const pool = Object.keys(window.LEXIS_IDIOM_SCENE || {}).filter((p) => !known.has(norm(p)));
-      return pool.slice(chunkFrontier("idiom", pool.length));
     }
     return [];
   }
   // one honest line telling you WHY this batch is what it is
+  // The tagging is automatic — you just save what you meet — so the rule has to
+  // be inspectable, otherwise a label looks arbitrary. Folded away by default.
+  function kindRuleHTML() {
+    const rules = window.LEXIS_PTYPE_RULE || [];
+    const cn = window.LEXIS_PTYPE_CN || {};
+    if (!rules.length) return "";
+    return `<details class="kind-rule"><summary>How are these decided??</summary>
+      <div class="kr-body">
+        <p class="kr-lead">Tagged automatically on save; <b>rules run top to bottom and the first match wins</b>,so every entry lands in exactly one bucket, never two.</p>
+        <div class="kr-l1"><b>Word</b> = no space ·  <b>Phrasal verbs</b> = rule 2 below ·  <b>Fixed expressions</b> = everything else</div>
+        <ol class="kr-list">${rules.map(([k, why, eg]) =>
+          `<li><b>${esc(cn[k] || k)}</b> ${esc(why)}<span class="kr-eg">${esc(eg)}</span></li>`).join("")}</ol>
+      </div></details>`;
+  }
+
   function discoverHint() {
-    if (dTab === "pv") return "<b>最高频的 149 个短语动词</b>(PHaVE List)。词都简单、意思不简单,而且一个动词常有好几个义项——这里<b>只列真正常用的义项</b>,括号里的百分比是它在真实语料中占该动词全部用法的比例。";
-    if (dTab === "phrases") return "按语料词频排序的 <b>498 条高频固定表达</b>(PHRASE List)——「单词都认识却说不出来」的就是这些。分类按<b>结构</b>而不是话题,每条给一句真实例句。";
-    if (dTab === "idioms") return "地道习语,按常用度排序,分类是使用场景。先看懂例句里的用法,再点「学习」加入生词本。";
+    const what = window.LEXIS_TAB_WHAT || {};
+    if (dTab === "pv") return what.pv || "";
+    if (dTab === "phrases") return what.expr || "";
     const w = weakBandOrder();
     const lvl = levelWindow((window.LEXIS_FREQ || []).length);
-    let s2 = "按词频推荐,标「已掌握」同步评估,「学习」加入生词本。";
-    if (lvl.mode === "beyond")
-      s2 += `<br>你的估算词汇量 <b>${lvl.estVocab.toLocaleString()}</b> 已经<b>超过这个 8 千词库</b>,所以已切换成<b>生僻词优先</b>。真正的提升空间在 <b>短语搭配</b> 和 <b>习语</b> 两个 tab。`;
+    let s2 = "Recommended by frequency. Known feeds the assessment; Learn adds to your notebook.";
+    // Saying nothing here reads as "this IS your level". It isn't — with no
+    // calibration the list simply starts at the top of an 8k frequency pool,
+    // i.e. the commonest words in English, which is why it looks too easy.
+    if (lvl.mode === "none")
+      s2 += `<br><b>Not calibrated yet</b> — this list starts at the very top of the 8,000-word frequency pool, which is why it looks easy. One <button class="linklike" id="dCal">reading assessment</button> (~2 min; a passage judges 60–100 words at once) sets your level and Discover jumps to it — no ticking words one by one.`;
+    else if (lvl.mode === "beyond")
+      s2 += `<br>Your estimated vocabulary  <b>${lvl.estVocab.toLocaleString()}</b> <b>already exceeds this 8k pool</b>, so it now leads with <b>rarest first</b>. Your real headroom is in  <b>Phrases</b> and <b>Idioms</b>.`;
     else if (lvl.mode === "above")
-      s2 += `<br>已跳过你水平以下的词,从 <b>≈${lvl.estVocab.toLocaleString()} 词</b>处开始推,还剩 ${lvl.left.toLocaleString()} 个。`;
-    if (w) s2 += `<br>并优先推「${w.map((k) => FREQ_CN[k] || k).join(" › ")}」——你评估里最薄弱的频段。`;
+      s2 += `<br>Skipping everything below your level; starting around <b>≈${lvl.estVocab.toLocaleString()}</b> — ${lvl.left.toLocaleString()} left.`;
+    if (w) s2 += `<br>and leads with ${w.map((k) => FREQ_CN[k] || k).join(" › ")}」——your weakest bands in the assessment.`;
     return s2;
   }
 
   function renderDiscover() {
     view.innerHTML = `
       <div class="subtabs" id="dtabs">
-        <button data-d="words" class="${dTab === "words" ? "on" : ""}">单词</button>
-        <button data-d="pv" class="${dTab === "pv" ? "on" : ""}">短语动词</button>
-        <button data-d="phrases" class="${dTab === "phrases" ? "on" : ""}">固定表达</button>
-        <button data-d="idioms" class="${dTab === "idioms" ? "on" : ""}">习语</button>
+        <button data-d="words" class="${dTab === "words" ? "on" : ""}">Words</button>
+        <button data-d="pv" class="${dTab === "pv" ? "on" : ""}">Phrasal verbs</button>
+        <button data-d="phrases" class="${dTab === "phrases" ? "on" : ""}">Fixed expressions</button>
       </div>
       <p class="muted" style="font-size:13px;margin-top:0">${discoverHint()}</p>
+      ${kindRuleHTML()}
       <div id="dcats"></div>
       <div id="dlist"></div>
-      <div class="row" style="margin-top:14px"><button class="btn" id="dmore" style="flex:1">换一批 ↻</button></div>`;
+      <div class="row" style="margin-top:14px"><button class="btn" id="dmore" style="flex:1">Shuffle ↻</button></div>`;
     view.querySelectorAll("#dtabs button").forEach((b) => b.addEventListener("click", () => { dTab = b.dataset.d; renderDiscover(); }));
+    if ($("#dCal")) $("#dCal").addEventListener("click", () => renderReadingPick());
     $("#dmore").addEventListener("click", () => { dCursor[dTab] += PAGE; drawStudy(); });
     drawStudy();
   }
@@ -1589,7 +2211,7 @@
     if (dCursor[dTab] >= pool.length) dCursor[dTab] = 0;
     const items = pool.slice(dCursor[dTab], dCursor[dTab] + PAGE);
     const box = $("#dlist");
-    if (!items.length) { box.innerHTML = `<div class="empty">暂无更多推荐。</div>`; return; }
+    if (!items.length) { box.innerHTML = `<div class="empty">Nothing more to recommend.</div>`; return; }
     box.innerHTML = items.map((term) => {
       // same classifier the category chips use, so a card's tag always matches the
       // bar above it (phrases → structural type, not topic)
@@ -1597,7 +2219,7 @@
       const scene = sc ? sc.cn : "";
       // an example sentence is the single most useful thing on a chunk card —
       // you learn a phrase from seeing it used, not from the phrase alone
-      // 短语动词 get their sense breakdown (which meaning is worth learning, and
+      // Phrasal verbs get their sense breakdown (which meaning is worth learning, and
       // what share of real uses it covers) instead of a single example
       const pv = dTab === "pv" && window.LEXIS_PHAVE_MAP && window.LEXIS_PHAVE_MAP.get(norm(term));
       const ex = pv ? "" : (window.LEXIS_PHRASE_EXAMPLE && window.LEXIS_PHRASE_EXAMPLE.get(norm(term))) || "";
@@ -1606,8 +2228,8 @@
         <span class="term serif">${esc(term)}</span>
         ${scene ? `<span class="g">${esc(scene)}</span>` : ""}
         <span class="act">
-          <button class="btn" data-act="learn">学习</button>
-          <button class="btn sage" data-act="master">已掌握</button>
+          <button class="btn" data-act="learn">Learn</button>
+          <button class="btn sage" data-act="master">Mastered</button>
         </span>
         ${hiEx ? `<div class="study-ex">${hiEx}</div>` : ""}
         ${pv ? pv.senses.map((sn) => `<div class="pv-sense"><span class="pv-pct">${sn.p}%</span><b>${esc(sn.d)}</b><div class="study-ex">${esc(sn.e)}</div></div>`).join("") : ""}</div>`;
@@ -1615,12 +2237,12 @@
     box.querySelectorAll(".study").forEach((row) => {
       const term = row.dataset.term;
       row.querySelector('[data-act="learn"]').addEventListener("click", async () => {
-        toast("查询中…"); const p = await lookupFull(term);
-        saveWord(p); toast("已加入生词本 <b>" + esc(term) + "</b>"); row.remove(); refreshBadge();
+        toast("Looking up……"); const p = await lookupFull(term);
+        saveWord(p); toast("Added to your notebook <b>" + esc(term) + "</b>"); row.remove(); refreshBadge();
       });
       row.querySelector('[data-act="master"]').addEventListener("click", () => {
         const a = getAssess(); if (!a.known.map(norm).includes(norm(term))) a.known.push(term);
-        setAssess(a); toast("已标记掌握"); row.remove();
+        setAssess(a); toast("Marked known"); row.remove();
       });
     });
   }
@@ -1637,75 +2259,87 @@
     const ck = chunkState();
     view.innerHTML = `
       <div class="card">
-        <h2 class="sec">概览</h2>
+        <h2 class="sec">Overview</h2>
         <div class="row" style="justify-content:space-between">
-          <div><div class="stat">${words.length}</div><div class="muted">生词</div></div>
-          <div><div class="stat">${dueWords().length}</div><div class="muted">待复习</div></div>
-          <div><div class="stat">${mastered}</div><div class="muted">已掌握</div></div>
+          <div><div class="stat">${words.length}</div><div class="muted">words</div></div>
+          <div><div class="stat">${dueWords().length}</div><div class="muted">due</div></div>
+          <div><div class="stat">${mastered}</div><div class="muted">Mastered</div></div>
         </div>
       </div>
       <div class="card">
-        <h2 class="sec">词汇量估算</h2>
+        <h2 class="sec">Vocabulary estimate</h2>
         <div class="stat">${(rEst ? rEst.estVocab : knownN).toLocaleString()}</div>
         <div class="muted">${rEst
-          ? `阅读评估 · 已读 ${(a.reading.passages || []).length} 篇 · 置信度 ${({ high: "高", mid: "中", low: "低" })[rEst.confidence]}(目标 15,000 词族)`
-          : "已标记掌握 + 生词本(目标 15,000 词族)· 还没做过评估"}</div>
+          ? `Reading assessment ·  ${(a.reading.passages || []).length}  read · confidence  ${({ high: "high", mid: "medium", low: "low" })[rEst.confidence]}(goal: 15,000 word families)`
+          : "marked known + notebook (goal: 15,000 word families) · not assessed yet"}</div>
         <div class="meter"><i style="width:${Math.min(100, ((rEst ? rEst.estVocab : knownN) / 15000) * 100)}%"></i></div>
         <div class="row" style="margin-top:8px">
-          <button class="btn primary" id="readAssessBtn">📖 阅读评估${rEst ? "(继续)" : ""}</button>
-          <button class="btn" id="assessBtn">逐词勾选</button>
+          <button class="btn primary" id="readAssessBtn">📖 Reading assessment${rEst ? "(continue)" : ""}</button>
+          <button class="btn" id="assessBtn">Tick word by word</button>
         </div>
       </div>
       <div class="card">
-        <h2 class="sec">语块产出能力</h2>
+        <h2 class="sec">Chunk production</h2>
         ${ck ? `<div class="row" style="gap:14px">${["phrase", "pv", "idiom"].map((k) => {
               const b = ck.bySrc[k]; if (!b) return "";
               return `<div><div class="stat" style="font-size:20px">${Math.round(b.pct * 100)}%</div><div class="muted" style="font-size:12px">${CHUNK_SRC_CN[k]}</div></div>`;
             }).join("")}</div>
-            <div class="muted" style="font-size:12px;margin-top:6px">Discover 已按这个结果跳过你能用的部分。</div>`
-          : `<p class="muted" style="font-size:13px;margin:0">词汇量上去之后,卡住的通常不是单词而是语块。摸一次底,Discover 就知道该从哪里开始推短语和习语。</p>`}
-        <div class="row" style="margin-top:8px"><button class="btn ${ck ? "" : "primary"}" id="chunkBtn">🧩 短语/习语摸底${ck ? "(重做)" : ""}</button>
-          ${ck ? `<button class="btn" id="chunkRes">看结果</button>` : ""}</div>
+            <div class="muted" style="font-size:12px;margin-top:6px">Discover skip what you can already use.</div>`
+          : `<p class="muted" style="font-size:13px;margin:0">Once your word count is high, what blocks you is usually chunks, not words. One quick check tells Discover where to start you on phrases and idioms.</p>`}
+        <div class="row" style="margin-top:8px"><button class="btn ${ck ? "" : "primary"}" id="chunkBtn">🧩 Phrase & idiom check${ck ? "(redo)" : ""}</button>
+          ${ck ? `<button class="btn" id="chunkRes">See result</button>` : ""}</div>
       </div>
       <div class="card">
-        <h2 class="sec">设置</h2>
-        <label class="set">中文释义 <input type="checkbox" id="setCn" ${s.chinese ? "checked" : ""}></label>
-        <label class="set">显示例句 <input type="checkbox" id="setEx" ${s.showExamples ? "checked" : ""}></label>
-        <label class="set">自动增补(例句/中文/词频) <input type="checkbox" id="setAuto" ${s.autoEnrich !== false ? "checked" : ""}></label>
-        <label class="set">每日新词上限 <input type="number" id="setLimit" value="${s.dailyNewLimit}" min="1" max="100" style="width:70px"></label>
-        <label class="set">每日复习目标 <input type="number" id="setGoal" value="${s.dailyGoal || 20}" min="5" max="200" step="5" style="width:70px"></label>
+        <h2 class="sec">Settings</h2>
+        <label class="set">Chinese gloss <input type="checkbox" id="setCn" ${s.chinese ? "checked" : ""}></label>
+        <label class="set">Gloss language
+          <span class="subtabs" style="margin:0">
+            <button class="${(s.glossLang || "both") === "both" ? "on" : ""}" data-gloss="both">Both</button>
+            <button class="${s.glossLang === "en" ? "on" : ""}" data-gloss="en">English</button>
+          </span></label>
+        <p class="muted" style="font-size:12px;margin:-4px 0 8px;line-height:1.6">「English= English-only study:No Chinese gloss or example translation anywhere, and review options are English definitions. The Chinese stays stored — switch back any time.</p>
+        <label class="set">Show examples <input type="checkbox" id="setEx" ${s.showExamples ? "checked" : ""}></label>
+        <label class="set">Auto top-up (examples / gloss / frequency) <input type="checkbox" id="setAuto" ${s.autoEnrich !== false ? "checked" : ""}></label>
+        <label class="set">New words per day <input type="number" id="setLimit" value="${s.dailyNewLimit}" min="1" max="100" style="width:70px"></label>
+        <label class="set">Daily review goal <input type="number" id="setGoal" value="${s.dailyGoal || 20}" min="5" max="200" step="5" style="width:70px"></label>
       </div>
-      <div class="row" style="margin:2px 0 12px"><button class="btn" id="advToggle" style="width:100%">⚙️ 数据与同步 ▾</button></div>
+      <div class="row" style="margin:2px 0 12px"><button class="btn" id="advToggle" style="width:100%">⚙️ Data & sync ▾</button></div>
       <div id="adv" class="adv">
       <div class="card">
-        <h2 class="sec">☁️ 云同步</h2>
-        <p class="muted" style="font-size:12px;margin:0 0 8px">和电脑 Chrome 扩展共用一个私有 GitHub Gist。点「同步」= 拉取 → 按新版优先合并 → 推回。Token 只存本机、绝不上传。<a href="https://github.com/settings/tokens/new?scopes=gist&description=Lexis%20Sync" target="_blank">生成 token</a>(只勾 gist)。</p>
+        <h2 class="sec">☁️ Cloud sync</h2>
+        <p class="muted" style="font-size:12px;margin:0 0 8px;line-height:1.7"><b>Merge rules (identical on the desktop):</b>① An entry's identity is its  <b>id</b>,not its spelling, so renaming never splits it in two;② <b>Your actions</b>(delete, rename, Known, your own sentences, review progress)<b>the later one wins</b>;③ <b>Look-up data</b>(definitions, examples, gloss, collocations)<b>the richer copy wins regardless of when it was fetched</b> —— a thin phone result never overwrites a good desktop one.</p>
+        <p class="muted" style="font-size:12px;margin:0 0 8px">Shares one private GitHub Gist with the Chrome extension. Press Sync to = pull, merge and push back. The token stays on this device and is never uploaded.<a href="https://github.com/settings/tokens/new?scopes=gist&description=Lexis%20Sync" target="_blank">Generate a token</a>(gist scope only).</p>
         <label class="set">Token <input type="password" id="setGistToken" value="${esc(s.gistToken || "")}" placeholder="ghp_…" autocomplete="off" style="width:150px"></label>
-        <label class="set">Gist ID <input type="text" id="setGistId" value="${esc(s.gistId || "")}" placeholder="留空首次自动创建" autocomplete="off" style="width:150px"></label>
-        <div class="row" style="margin-top:8px"><button class="btn sage" id="syncBtn">☁️ 同步</button></div>
+        <label class="set">Gist ID <input type="text" id="setGistId" value="${esc(s.gistId || "")}" placeholder="blank = created on first sync" autocomplete="off" style="width:150px"></label>
+        <div class="row" style="margin-top:8px"><button class="btn sage" id="syncBtn">☁️ Sync</button></div>
       </div>
       <div class="card">
-        <h2 class="sec">生词本维护</h2>
-        <p class="muted" style="font-size:12px;margin:0 0 8px">内容不完整的词条(缺释义/例句/中文/词频)会在你打开生词本时<b>自动后台补全</b>,每次几个。也可以在这里一次补完。</p>
+        <h2 class="sec">Notebook upkeep</h2>
+        <p class="muted" style="font-size:12px;margin:0 0 8px">Thin entries — missing a definition, examples, gloss or frequency — are topped up when you open the notebook, <b>Auto top-up in the background</b>,a few at a time. You can also do them all now.</p>
         <div class="row">
-          <button class="btn ${incomplete ? "sage" : ""}" id="fixAll">${incomplete ? `立即补全 ${incomplete} 个不完整词条` : "内容都完整 ✓"}</button>
+          <button class="btn ${incomplete ? "sage" : ""}" id="fixAll">${incomplete ? `Top up now ${incomplete}  thin entries` : "all complete ✓"}</button>
         </div>
-        <div class="row" style="margin-top:8px"><button class="btn" id="tidyWords">清理人名/地名/无意义词 · 规整复数</button></div>
+        <div class="row" style="margin-top:8px"><button class="btn" id="tidyWords">Clean out names & junk · normalise plurals</button></div>
       </div>
       <div class="card">
-        <h2 class="sec">数据</h2>
-        <div class="row"><button class="btn" id="exp">导出 JSON</button><button class="btn" id="imp">导入</button><button class="btn" id="clr" style="color:#c05a5a">清空</button></div>
+        <h2 class="sec">Data</h2>
+        <div class="row"><button class="btn" id="exp">Export JSON</button><button class="btn" id="imp">Import</button><button class="btn" id="clr" style="color:#c05a5a">Erase all</button></div>
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.55.0 · 数据仅存本机浏览器</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.66.0 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
       const open = $("#adv").classList.toggle("open");
-      $("#advToggle").textContent = open ? "⚙️ 数据与同步 ▴" : "⚙️ 数据与同步 ▾";
+      $("#advToggle").textContent = open ? "⚙️ Data & sync ▴" : "⚙️ Data & sync ▾";
     });
     $("#setCn").addEventListener("change", (e) => { s.chinese = e.target.checked; setSettings(s); });
+    view.querySelectorAll("[data-gloss]").forEach((b) => b.addEventListener("click", () => {
+      const s3 = getSettings(); s3.glossLang = b.dataset.gloss; setSettings(s3);
+      if (session) { session.drill = null; session.drillFor = null; }
+      renderMe();
+    }));
     $("#setEx").addEventListener("change", (e) => { s.showExamples = e.target.checked; setSettings(s); });
     $("#setAuto").addEventListener("change", (e) => { s.autoEnrich = e.target.checked; setSettings(s); });
     $("#setLimit").addEventListener("change", (e) => { s.dailyNewLimit = +e.target.value || 15; setSettings(s); });
@@ -1722,21 +2356,21 @@
     $("#impFile").addEventListener("change", importData);
     $("#clr").addEventListener("click", () => {
       // the one action that stays behind a confirm — it wipes settings + token too
-      if (confirm("清空本机所有生词与设置?这一步无法撤销(云端 Gist 不受影响)。")) { localStorage.clear(); toast("已清空"); go("me"); }
+      if (confirm("Erase every word and setting on this device?This cannot be undone. The cloud Gist is unaffected.")) { localStorage.clear(); toast("Cleared"); go("me"); }
     });
     $("#fixAll").addEventListener("click", async (e) => {
       const btn = e.target;
-      if (!incomplete) { toast("生词本里的内容都是完整的 ✓"); return; }
+      if (!incomplete) { toast("Every entry in your notebook is complete ✓"); return; }
       btn.disabled = true;
-      const n = await sweepIncomplete({ manual: true, onProgress: (i, t, w) => { btn.textContent = `补全中 ${i}/${t} · ${w}`; } });
-      toast(n ? `已补全 ${n} 个词条 ✓` : "这些词条已经拿不到更多内容了");
+      const n = await sweepIncomplete({ manual: true, onProgress: (i, t, w) => { btn.textContent = `Topping up… ${i}/${t} · ${w}`; } });
+      toast(n ? `Topped up ${n}  entries ✓` : "No more content is available for these");
       go("me");
     });
     $("#tidyWords").addEventListener("click", () => {
       const r = tidyNotebook();
       toast(r.removed || r.merged
-        ? `已清理 ${r.removed} 个人名/地名/无意义词` + (r.merged ? `,合并 ${r.merged} 个复数/变形重复` : "")
-        : "生词本已经很干净了 ✓");
+        ? `Cleaned ${r.removed} names / junk entries` + (r.merged ? `, merged ${r.merged} inflected duplicates` : "")
+        : "Your notebook is already clean ✓");
       go("me");
     });
   }
@@ -1771,27 +2405,33 @@
     if (_syncing) return;
     const s = getSettings();
     const t = (s.gistToken || "").trim();
-    if (!t) { if (!opts.silent) toast("先填 GitHub token(只勾 gist 权限)"); return; }
+    if (!t) { if (!opts.silent) toast("Add a GitHub token first (gist scope only)"); return; }
     _syncing = true;
     const btn = opts.btn, label = btn ? btn.textContent : "";
     const FILE = "lexis.json";
     const hdr = { Authorization: "Bearer " + t, Accept: "application/vnd.github+json" };
     const key = (x) => String(x || "").toLowerCase().trim();
     let changed = false;
-    const mergeRemote = (remoteWords) => {
-      const cur = getWords();
-      const byKey = new Map(cur.map((w) => [key(w.word), w]));
-      const before = cur.length;
-      for (const w of remoteWords || []) {
-        if (!w || !w.word) continue;
-        const k = key(w.word), old = byKey.get(k);
-        if (!old || (w.updatedAt || 0) > (old.updatedAt || 0)) { byKey.set(k, w); changed = true; }
-      }
-      const merged = Array.from(byKey.values());
-      if (merged.length !== before) changed = true;
-      _suppressAutoSync = true; setWords(merged); _suppressAutoSync = false;
+    // The whole merge lives in vocab.js so this and the extension cannot drift.
+    // Rules: identity is the id (not the word), user intent = newer wins,
+    // look-up data = richer wins regardless of when it was fetched.
+    const mergeRemote = (remoteWords, remoteTombs) => {
+      const tombs = getTombs();
+      let tombChanged = false;
+      Object.keys(remoteTombs || {}).forEach((k) => {
+        const t = remoteTombs[k] || 0;
+        if (t > (tombs[k] || 0)) { tombs[k] = t; tombChanged = true; }
+      });
+      if (pruneTombs(tombs)) tombChanged = true;
+      if (tombChanged) save(K.deleted, tombs);
+      const r = window.lexisMergeNotebooks
+        ? window.lexisMergeNotebooks(getWords(), remoteWords || [], tombs)
+        : { words: getWords(), changed: false };
+      if (r.changed) changed = true;
+      _suppressAutoSync = true; setWords(r.words); _suppressAutoSync = false;
     };
-    // The vocabulary calibration (已掌握 set + 阅读式评估) carries no secrets and is
+
+    // The vocabulary calibration (Mastered set + 阅读式评估) carries no secrets and is
     // useless if it only lives on one device, so it rides along with the words.
     // Whole-object newer-wins: it is a single evolving record, not a per-item list.
     const assessPayload = () => { const a = getAssess(); return { known: a.known || [], reading: a.reading || null, estVocab: a.estVocab || 0, updatedAt: a.updatedAt || 0 }; };
@@ -1806,18 +2446,18 @@
       setAssess(a, true); changed = true;
     };
     try {
-      if (btn) btn.textContent = "拉取中…";
+      if (btn) btn.textContent = "Pulling……";
       let id = (s.gistId || "").trim();
       if (id) {
         const r = await fetch("https://api.github.com/gists/" + id, { headers: hdr });
         if (r.ok) {
           const g = await r.json(); const f = g.files && g.files[FILE];
-          if (f && f.content) { try { const d = JSON.parse(f.content); mergeRemote(Array.isArray(d) ? d : d.words); if (!Array.isArray(d)) mergeRemoteAssess(d.assess); } catch (e) {} }
+          if (f && f.content) { try { const d = JSON.parse(f.content); mergeRemote(Array.isArray(d) ? d : d.words, Array.isArray(d) ? {} : d.deleted); if (!Array.isArray(d)) mergeRemoteAssess(d.assess); } catch (e) {} }
         } else if (r.status === 404) { id = ""; }
-        else if (r.status === 401) throw new Error("token 无效");
+        else if (r.status === 401) throw new Error("invalid token");
       }
-      if (btn) btn.textContent = "推送中…";
-      const body = JSON.stringify({ description: "Lexis vocab sync", public: false, files: { [FILE]: { content: JSON.stringify({ words: getWords(), assess: assessPayload(), syncedAt: now() }) } } });
+      if (btn) btn.textContent = "Pushing……";
+      const body = JSON.stringify({ description: "Lexis vocab sync", public: false, files: { [FILE]: { content: JSON.stringify({ words: getWords(), assess: assessPayload(), deleted: getTombs(), syncedAt: now() }) } } });
       const resp = id
         ? await fetch("https://api.github.com/gists/" + id, { method: "PATCH", headers: hdr, body })
         : await fetch("https://api.github.com/gists", { method: "POST", headers: hdr, body });
@@ -1825,11 +2465,11 @@
       const g = await resp.json();
       if (g.id && g.id !== s.gistId) { s.gistId = g.id; setSettings(s); }
       refreshBadge();
-      if (!opts.silent) { toast(`已同步 ✓ 共 ${getWords().length} 词`); go("me"); }
+      if (!opts.silent) { toast(`Synced ✓ ${getWords().length} words`); go("me"); }
       else if (changed && (current === "notebook" || current === "review" || current === "me")) go(current); // reflect pulled words
     } catch (err) {
-      if (!opts.silent) toast("同步失败:" + (err.message || err));
-      if (btn) btn.textContent = label || "☁️ 同步";
+      if (!opts.silent) toast("Sync failed:" + (err.message || err));
+      if (btn) btn.textContent = label || "☁️ Sync";
     } finally { _syncing = false; _lastSync = now(); }
   }
   // button handler (manual sync from Settings)
@@ -1865,9 +2505,9 @@
     r.onload = () => {
       try {
         const n = mergeImport(JSON.parse(r.result));
-        if (n < 0) { toast("文件无效"); return; }
-        toast(`已合并 ${n} 个单词 ✓`); refreshBadge(); go("me");
-      } catch (x) { toast("文件无效"); }
+        if (n < 0) { toast("Invalid file"); return; }
+        toast(`merged ${n}  words ✓`); refreshBadge(); go("me");
+      } catch (x) { toast("Invalid file"); }
     };
     r.readAsText(f);
   }
@@ -1897,18 +2537,18 @@
     const done = new Set(r.passages || []);
     const est = readingEstimate(r);
     view.innerHTML = `
-      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← 返回</button></div>
+      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← Back</button></div>
       <div class="card">
-        <h2 class="sec">阅读式词汇量评估</h2>
-        <p class="muted" style="font-size:13px;margin:0">读一段短文,<b>只点你不认识的词</b>。没点的词都算你认识——一篇约等于 100 次判断,比一个个勾选快得多。读 2 篇以上结果更准。</p>
-        ${est ? `<div class="row" style="margin-top:10px"><span class="stat">${est.estVocab.toLocaleString()}</span><span class="muted">当前估算 · 已取样 ${est.sampled} 词 · 置信度 ${({ high: "高", mid: "中", low: "低" })[est.confidence]}</span></div>` : ""}
+        <h2 class="sec">Reading assessment</h2>
+        <p class="muted" style="font-size:13px;margin:0">Read a short passage and <b>tap only the words you don't know</b>。Everything you leave counts as known — about 100 judgements per passage, far faster than ticking one at a time. Two or more passages gives a sharper number.</p>
+        ${est ? `<div class="row" style="margin-top:10px"><span class="stat">${est.estVocab.toLocaleString()}</span><span class="muted">current estimate · sampled  ${est.sampled}  · confidence  ${({ high: "high", mid: "medium", low: "low" })[est.confidence]}</span></div>` : ""}
       </div>
       ${passages.map((p) => `<div class="item" data-pass="${esc(p.id)}">
-        <div style="min-width:0"><div class="w serif">${esc(p.title)}</div><div class="meta">${esc(p.cn)} · 约 ${p.text.split(/\s+/).length} 词</div></div>
-        <span class="st chip">${done.has(p.id) ? "已读 · 重读" : "开始"}</span></div>`).join("")}
+        <div style="min-width:0"><div class="w serif">${esc(p.title)}</div><div class="meta">${esc(p.cn)} · ~${p.text.split(/\s+/).length} words</div></div>
+        <span class="st chip">${done.has(p.id) ? "read · read again" : "Start"}</span></div>`).join("")}
       <div class="row" style="margin-top:14px">
-        <button class="btn" id="wordwise">改用逐词勾选</button>
-        ${est ? `<button class="btn sage" id="seeRes">查看评估结果</button>` : ""}
+        <button class="btn" id="wordwise">Tick word by word instead</button>
+        ${est ? `<button class="btn sage" id="seeRes">See the result</button>` : ""}
       </div>`;
     $("#back").addEventListener("click", () => go("me"));
     $("#wordwise").addEventListener("click", startAssess);
@@ -1921,29 +2561,46 @@
     if (!p) return;
     const toks = window.lexisPassageTokens(p.text);
     const marked = new Set();
+    const phrases = new Set();
     view.innerHTML = `
-      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← 返回</button>
-        <span class="muted" style="margin-left:auto;font-size:12px" id="mcount">已标记 0 个生词</span></div>
+      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← Back</button>
+        <span class="muted" style="margin-left:auto;font-size:12px" id="mcount">0 marked</span></div>
       <div class="card">
         <h2 class="sec">${esc(p.title)}</h2>
-        <p class="muted" style="font-size:12px;margin:0 0 10px">点掉你<b>不认识</b>的词(再点一次取消)。基础词不可点,不计入统计。</p>
+        <p class="muted" style="font-size:12px;margin:0 0 10px">Tap the words you <b>don't know</b> (tap again to undo). Basic words aren't tappable and don't count.<br>
+        Is it a <b>chunk</b>? Press and hold to <b>select those words</b>, then pick Don't know or Look up on the bar that appears.</p>
         <div class="passage" id="ptext">${toks.map((t, i) => t.word
           ? (t.band ? `<span class="rw" data-i="${i}" data-k="${esc(t.key)}" data-b="${esc(t.band)}">${esc(t.text)}</span>` : esc(t.text))
           : esc(t.text)).join("")}</div>
+        <div id="phbox"></div>
       </div>
-      <div class="row"><button class="btn primary" id="pdone" style="flex:1;padding:13px">读完了,算一下 →</button></div>`;
+      <div class="row"><button class="btn primary" id="pdone" style="flex:1;padding:13px">Done — work it out →</button></div>`;
     $("#back").addEventListener("click", renderReadingPick);
     const cnt = $("#mcount");
+    // Chunks marked unknown are listed under the passage rather than highlighted
+    // inside it: a phrase spans several tokens and rewriting the passage DOM
+    // would fight the per-word marking. They carry no band, so they don't touch
+    // the size estimate — they go to the notebook, which is the actual point.
+    const drawPh = () => {
+      const box = $("#phbox");
+      const list = Array.from(phrases);
+      box.innerHTML = list.length
+        ? `<div class="ph-lbl">Chunks marked ·  ${list.length}</div><div class="row" style="flex-wrap:wrap;gap:6px">${list.map((t) => `<span class="chip ph-chip">${esc(t)} <button class="ph-x" data-phdel="${esc(t)}">✕</button></span>`).join("")}</div>`
+        : "";
+      box.querySelectorAll("[data-phdel]").forEach((b) => b.addEventListener("click", () => { phrases.delete(b.dataset.phdel); drawPh(); }));
+    };
+    passagePhrases = { add: (t) => { phrases.add(t); drawPh(); } };
     view.querySelectorAll(".rw").forEach((n) => n.addEventListener("click", () => {
       const k = n.dataset.k;
       if (marked.has(k)) marked.delete(k); else marked.add(k);
       view.querySelectorAll(`.rw[data-k="${CSS.escape(k)}"]`).forEach((m) => m.classList.toggle("unk", marked.has(k)));
-      cnt.textContent = `已标记 ${marked.size} 个生词`;
+      cnt.textContent = `marked ${marked.size}  marked`;
     }));
     $("#pdone").addEventListener("click", () => {
       const a = getAssess();
       const r = a.reading || { seen: {}, unknown: [], passages: [] };
       const unknown = new Set(r.unknown || []);
+      phrases.forEach((t) => unknown.add(t));
       const knownAdd = [];
       view.querySelectorAll(".rw").forEach((n) => {
         r.seen[n.dataset.k] = n.dataset.b;
@@ -1953,7 +2610,7 @@
       r.unknown = Array.from(unknown);
       r.passages = Array.from(new Set((r.passages || []).concat([p.id])));
       r.at = now();
-      // words you read without stumbling feed the same 已掌握 set the rest of the
+      // words you read without stumbling feed the same Mastered set the rest of the
       // app uses, so Discover stops offering them
       a.known = Array.from(new Set([].concat(a.known || [], knownAdd)));
       a.reading = r;
@@ -1968,30 +2625,31 @@
     const r = readingState();
     const est = readingEstimate(r);
     if (!est) { renderReadingPick(); return; }
-    const conf = { high: "高", mid: "中", low: "低" }[est.confidence];
+    const conf = { high: "high", mid: "medium", low: "low" }[est.confidence];
     const bars = est.bands.map((b) => `
       <div class="lvl">
         <span class="lvl-bl mfreq freq-${b.key === "beyond" ? "rare" : b.key}">${esc(b.cn)}</span>
         <span class="lvl-track"><i class="freq-${b.key === "beyond" ? "rare" : b.key}" style="width:${Math.round(b.pct * 100)}%"></i></span>
-        <span class="lvl-n">${b.measured ? Math.round(b.pct * 100) + "% · 取样 " + b.seen : "取样不足"}</span>
+        <span class="lvl-n">${b.measured ? Math.round(b.pct * 100) + "% · " + b.seen + " sampled"
+          : (b.key === "beyond" ? Math.round(b.pct * 100) + "% · inferred" : "too few samples")}</span>
       </div>`).join("");
     const unk = (r.unknown || []).slice(0, 60);
     view.innerHTML = `
-      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← 返回</button></div>
+      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← Back</button></div>
       <div class="card">
-        <h2 class="sec">估算词汇量</h2>
+        <h2 class="sec">Estimated vocabulary</h2>
         <div class="stat">${est.estVocab.toLocaleString()}</div>
-        <div class="muted">词族 · 已读 ${(r.passages || []).length} 篇 · 取样 ${est.sampled} 词 · 置信度 ${conf}${
-          est.confidence === "high" ? "" : `<br>取样还不多,实际大概在 <b>${est.range[0].toLocaleString()}–${est.range[1].toLocaleString()}</b> 之间——再读一篇会收窄。`}</div>
+        <div class="muted"> word families ·  ${(r.passages || []).length}  read ·  ${est.sampled}  · confidence  ${conf}${
+          est.confidence === "high" ? "" : `<br>Still a thin sample — probably between  <b>${est.range[0].toLocaleString()}–${est.range[1].toLocaleString()}</b> . One more passage narrows it.`}</div>
         <div class="meter"><i style="width:${Math.min(100, (est.estVocab / 15000) * 100)}%"></i></div>
-        <div class="muted" style="font-size:12px">目标 15,000 词族(无障碍看懂英美影视/播客)</div>
+        <div class="muted" style="font-size:12px">goal: 15,000 word families — enough to follow English film, TV and podcasts</div>
       </div>
-      <div class="card"><h2 class="sec">各频段掌握度</h2>${bars}
-        <div class="muted" style="font-size:12px;margin-top:8px">按你在文中读到的词统计:该频段没点掉的比例。Discover 会优先推你最薄弱的频段。</div></div>
-      ${unk.length ? `<div class="card"><h2 class="sec">你标记的生词 · ${(r.unknown || []).length}</h2>
+      <div class="card"><h2 class="sec">Coverage by band</h2>${bars}
+        <div class="muted" style="font-size:12px;margin-top:8px">counted from the words you read:the share you did not tap in that band. Discover now leads with your weakest ones.</div></div>
+      ${unk.length ? `<div class="card"><h2 class="sec">Words you marked ·  ${(r.unknown || []).length}</h2>
         <div class="row">${unk.map((w) => `<span class="chip" data-look="${esc(w)}">${esc(w)}</span>`).join("")}</div>
-        <div class="row" style="margin-top:10px"><button class="btn sage" id="addUnk">全部加入生词本</button></div></div>` : ""}
-      <div class="row"><button class="btn" id="more" style="flex:1">再读一篇 →</button><button class="btn" id="toDisc" style="flex:1">去 Discover 学新词</button></div>`;
+        <div class="row" style="margin-top:10px"><button class="btn sage" id="addUnk">Add all to notebook</button></div></div>` : ""}
+      <div class="row"><button class="btn" id="more" style="flex:1">Read another →</button><button class="btn" id="toDisc" style="flex:1">Learn new words in Discover</button></div>`;
     $("#back").addEventListener("click", () => go("me"));
     $("#more").addEventListener("click", renderReadingPick);
     $("#toDisc").addEventListener("click", () => go("discover"));
@@ -1999,18 +2657,18 @@
     const au = $("#addUnk");
     if (au) au.addEventListener("click", async () => {
       const list = (readingState().unknown || []).filter((w) => !findWord(w));
-      if (!list.length) { toast("都已经在生词本里了"); return; }
+      if (!list.length) { toast("All of these are already in your notebook"); return; }
       au.disabled = true;
       for (let i = 0; i < list.length; i++) {
-        au.textContent = `加入中 ${i + 1}/${list.length}…`;
+        au.textContent = `Adding… ${i + 1}/${list.length}…`;
         saveWord(await lookupFull(list[i]));
       }
-      toast(`已加入 ${list.length} 个词`); refreshBadge(); renderReadingResult();
+      toast(`Added ${list.length} words`); refreshBadge(); renderReadingResult();
     });
   }
 
 
-  // ---- 短语 / 习语摸底 -----------------------------------------------------
+  // ---- Phrase & idiom check -----------------------------------------------------
   // Frequency alone can't tell Discover where to start on chunks: "have to" is
   // rank 1 and trivially known, while a rank-300 phrasal verb may not be. So we
   // sample across the whole rank range and ask the one question that matters for
@@ -2030,16 +2688,16 @@
     return pick(pl, 24).concat(pick(pv, 14), pick(id, 12));
   }
   function chunkState() { return getAssess().chunk || null; }
-  const CHUNK_SRC_CN = { phrase: "固定表达", pv: "短语动词", idiom: "习语" };
+  const CHUNK_SRC_CN = { phrase: "Fixed expressions", pv: "Phrasal verbs", idiom: "Idioms" };
 
   function renderChunkAssess() {
     const items = chunkSample();
     const marked = new Set(((chunkState() || {}).unknown) || []);
     view.innerHTML = `
-      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← 返回</button></div>
+      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← Back</button></div>
       <div class="card">
-        <h2 class="sec">短语 / 习语摸底</h2>
-        <p class="muted" style="font-size:13px;margin:0">下面是按常用度<b>均匀取样</b>的 ${items.length} 个语块。<b>点掉你「说不出来」的</b>——看得懂但轮到自己表达时想不起用它,就算说不出来。这正是「单词都认识却说不出口」的那部分。</p>
+        <h2 class="sec">Phrase & idiom check</h2>
+        <p class="muted" style="font-size:13px;margin:0">${items.length} chunks <b>sampled evenly</b> across the frequency range. <b>Tap the ones you couldn't produce</b>——Recognising it but not reaching for it when you speak counts as couldn't. That gap is exactly "I know every word and still can't say it".</p>
       </div>
       ${["phrase", "pv", "idiom"].map((src) => {
         const g = items.filter((x) => x.src === src);
@@ -2048,14 +2706,14 @@
           <div class="row">${g.map((x) =>
             `<button class="chunk-chip${marked.has(x.term) ? " unk" : ""}" data-ck="${esc(x.term)}">${esc(x.term)}</button>`).join("")}</div></div>`;
       }).join("")}
-      <div class="row"><button class="btn primary" id="ckDone" style="flex:1;padding:13px">算一下 →</button>
-        <span class="muted" id="ckN" style="font-size:12px">已点 ${marked.size}</span></div>`;
+      <div class="row"><button class="btn primary" id="ckDone" style="flex:1;padding:13px">Work it out →</button>
+        <span class="muted" id="ckN" style="font-size:12px">${marked.size} tapped</span></div>`;
     $("#back").addEventListener("click", () => go("me"));
     view.querySelectorAll("[data-ck]").forEach((b) => b.addEventListener("click", () => {
       const t = b.dataset.ck;
       if (marked.has(t)) marked.delete(t); else marked.add(t);
       b.classList.toggle("unk", marked.has(t));
-      $("#ckN").textContent = "已点 " + marked.size;
+      $("#ckN").textContent = marked.size + " tapped";
     }));
     $("#ckDone").addEventListener("click", () => {
       const a = getAssess();
@@ -2085,17 +2743,17 @@
       return `<div class="lvl">
         <span class="lvl-bl mfreq">${CHUNK_SRC_CN[src]}</span>
         <span class="lvl-track"><i style="width:${Math.round(b.pct * 100)}%"></i></span>
-        <span class="lvl-n">能说出 ${Math.round(b.pct * 100)}% · ${b.seen} 取样</span></div>`;
+        <span class="lvl-n">can produce ${Math.round(b.pct * 100)}% · ${b.seen} sampled</span></div>`;
     }).join("");
     const unk = c.unknown || [];
     view.innerHTML = `
-      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← 返回</button></div>
-      <div class="card"><h2 class="sec">语块产出能力</h2>${rows}
-        <div class="muted" style="font-size:12px;margin-top:8px">Discover 的三个语块 tab 已按这个结果<b>跳过你已经能用的部分</b>,从你说不出来的地方开始推。</div></div>
-      ${unk.length ? `<div class="card"><h2 class="sec">你说不出来的 · ${unk.length}</h2>
+      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← Back</button></div>
+      <div class="card"><h2 class="sec">Chunk production</h2>${rows}
+        <div class="muted" style="font-size:12px;margin-top:8px">Discover 's three chunk tabs now <b>skip what you can already use</b>,and start where you couldn't produce it.</div></div>
+      ${unk.length ? `<div class="card"><h2 class="sec">Couldn't produce ·  ${unk.length}</h2>
         <div class="row">${unk.slice(0, 60).map((t) => `<span class="chip" data-look="${esc(t)}">${esc(t)}</span>`).join("")}</div>
-        <div class="row" style="margin-top:10px"><button class="btn sage" id="ckAdd">全部加入生词本</button></div></div>` : ""}
-      <div class="row"><button class="btn" id="ckAgain" style="flex:1">重新摸底</button><button class="btn" id="ckDisc" style="flex:1">去学这些语块 →</button></div>`;
+        <div class="row" style="margin-top:10px"><button class="btn sage" id="ckAdd">Add all to notebook</button></div></div>` : ""}
+      <div class="row"><button class="btn" id="ckAgain" style="flex:1">Redo the check</button><button class="btn" id="ckDisc" style="flex:1">Study these chunks →</button></div>`;
     $("#back").addEventListener("click", () => go("me"));
     $("#ckAgain").addEventListener("click", renderChunkAssess);
     $("#ckDisc").addEventListener("click", () => { dTab = "pv"; go("discover"); });
@@ -2103,10 +2761,10 @@
     const add = $("#ckAdd");
     if (add) add.addEventListener("click", async () => {
       const list = unk.filter((t) => !findWord(t));
-      if (!list.length) { toast("都已经在生词本里了"); return; }
+      if (!list.length) { toast("All of these are already in your notebook"); return; }
       add.disabled = true;
-      for (let i = 0; i < list.length; i++) { add.textContent = `加入中 ${i + 1}/${list.length}…`; saveWord(await lookupFull(list[i])); }
-      toast(`已加入 ${list.length} 个语块`); refreshBadge(); renderChunkResult();
+      for (let i = 0; i < list.length; i++) { add.textContent = `Adding… ${i + 1}/${list.length}…`; saveWord(await lookupFull(list[i])); }
+      toast(`Added ${list.length}  chunks`); refreshBadge(); renderChunkResult();
     });
   }
 
@@ -2121,11 +2779,11 @@
     const chosen = new Set(known);
     view.innerHTML = `
       <div class="card">
-        <h2 class="sec">词汇量快速评估</h2>
-        <p class="muted">勾选你**认识**的词（从高频到低频取样），完成后估算词汇量。</p>
+        <h2 class="sec">Quick vocabulary check</h2>
+        <p class="muted">Tick the ones you <b>know</b> — sampled from frequent to rare; the estimate follows.</p>
         <div id="agrid" class="row" style="gap:8px">${picks.map((w) =>
           `<button class="chip" data-w="${esc(w)}" style="padding:8px 12px;font-size:14px">${esc(w)}</button>`).join("")}</div>
-        <div class="row" style="margin-top:14px"><button class="btn primary" id="adone" style="flex:1">完成评估</button></div>
+        <div class="row" style="margin-top:14px"><button class="btn primary" id="adone" style="flex:1">Finish</button></div>
       </div>`;
     view.querySelectorAll("#agrid .chip").forEach((b) => b.addEventListener("click", () => {
       const w = norm(b.dataset.w);
@@ -2138,7 +2796,7 @@
       // rough estimate: proportion known * pool size, floored
       const ratio = picks.filter((w) => chosen.has(norm(w))).length / picks.length;
       a.estVocab = Math.round(ratio * (pool.length || 8000));
-      setAssess(a); toast("估算词汇量约 " + a.estVocab.toLocaleString() + " 词"); go("me");
+      setAssess(a); toast("Estimated vocabulary ≈ " + a.estVocab.toLocaleString() + " words"); go("me");
     });
   }
 
@@ -2147,9 +2805,9 @@
     const term = norm(rawTerm);
     if (!term) return;
     const ctx = (context || "").trim();
-    const src = (source || "").trim() || "粘贴保存";
+    const src = (source || "").trim() || "Paste & save";
     const box = openLookupPane();
-    if (box) box.innerHTML = `<div class="empty"><span class="spin"></span> 正在保存 <b>${esc(term)}</b>…</div>`;
+    if (box) box.innerHTML = `<div class="empty"><span class="spin"></span> Saving… <b>${esc(term)}</b>…</div>`;
     if (findWord(term)) {
       // already saved — append this new original sentence as another dated sighting
       if (ctx) {
@@ -2160,19 +2818,19 @@
             rec.sightings.unshift({ context: ctx, at: now(), source: src });
             if (!rec.context) rec.context = ctx;
             rec.updatedAt = now(); setWords(ws);
-            toast("已添加一条原句到 <b>" + esc(term) + "</b>");
+            toast("Sentence added to  <b>" + esc(term) + "</b>");
             if (box) doLookup(term); return;
           }
         }
       }
-      toast("已经在生词本里了");
+      toast("Already in your notebook");
       if (box) doLookup(term);
       return;
     }
     const p = await lookupFull(term);
     p.context = ctx; p.source = src;
     saveWord(p);
-    toast(ctx ? "已保存 <b>" + esc(term) + "</b>(含原句)" : "已保存 <b>" + esc(term) + "</b>");
+    toast(ctx ? "Saved <b>" + esc(term) + "</b>(with its sentence)" : "Saved <b>" + esc(term) + "</b>");
     refreshBadge();
     if (box) doLookup(term);
   }
@@ -2184,10 +2842,10 @@
       if (navigator.clipboard && navigator.clipboard.readText) text = await navigator.clipboard.readText();
     } catch (e) { text = ""; }
     text = (text || "").trim();
-    if (!text) { toast("剪贴板是空的,先在别的 App 里拷贝一个单词或一句话"); return; }
+    if (!text) { toast("Clipboard is empty — copy a word or a sentence in another app first"); return; }
     if (current !== "notebook") go("notebook");
     const alphaWords = text.match(/[A-Za-z][A-Za-z'’-]*/g) || [];
-    if (!alphaWords.length) { toast("剪贴板里没有英文词"); return; }
+    if (!alphaWords.length) { toast("No English word on the clipboard"); return; }
     // single word → look it up first (Save button on the card); a sentence → tap the target word
     if (alphaWords.length === 1) { doLookup(alphaWords[0]); return; }
     showWordPicker(text, alphaWords);
@@ -2198,10 +2856,10 @@
   function showWordPicker(sentence, words) {
     const box = openLookupPane(); if (!box) return;
     const html = esc(sentence).replace(/[A-Za-z][A-Za-z'’-]*/g, (m) => `<span class="pickw" data-w="${esc(m)}">${m}</span>`);
-    box.innerHTML = `<div class="card"><h2 class="sec">点选要查的词</h2>
+    box.innerHTML = `<div class="card"><h2 class="sec">Tap the word to look up</h2>
       <div class="ex pick-sentence">${html}</div>
-      <p class="muted" style="font-size:12px;margin-top:8px">点句中任意词先查看释义,再决定保存(整句会作为原句语境一并保存);短语请点「整句查询」。</p>
-      <div class="row" style="margin-top:10px"><button class="btn" id="pickPhrase">整句作为短语查询</button></div></div>`;
+      <p class="muted" style="font-size:12px;margin-top:8px">Tap any word to see its definition before saving — the whole sentence is kept as its context;For a phrase, use Look up whole sentence.</p>
+      <div class="row" style="margin-top:10px"><button class="btn" id="pickPhrase">Look up the whole sentence</button></div></div>`;
     box.querySelectorAll(".pickw").forEach((n) => n.addEventListener("click", () => doLookup(n.dataset.w, sentence)));
     const pp = $("#pickPhrase"); if (pp) pp.addEventListener("click", () => doLookup(sentence, sentence));
   }
@@ -2220,11 +2878,21 @@
     }
     // ?q=<term> — look up WITHOUT saving (mirrors the extension's #look/<term> deep link)
     const q = (qs.get("q") || "").trim();
-    if (!add && q) doLookup(q, (qs.get("ctx") || "").trim());
+    if (!add && q) {
+      // A whole sentence arrived as the "term" (long macOS selection, or a
+      // Shortcut that grabbed the paragraph). Don't look that up — show it and
+      // let the word be tapped, with the sentence kept as its context. Mirrors
+      // the extension's routeLook().
+      const qw = q.match(/[A-Za-z][A-Za-z'’-]*/g) || [];
+      if (q.split(/\s+/).filter(Boolean).length > 6 && qw.length > 1) showWordPicker(q, qw);
+      else doLookup(q, (qs.get("ctx") || "").trim());
+    }
   } catch (e) {}
 
   // auto-sync: pull the shared gist on open, and again whenever the app regains focus
   // (fixes the iOS split-storage gap — every surface converges through the gist)
+  repairWords();
+  if (repairedDupes) setTimeout(() => toast(`Repaired ${repairedDupes}  duplicate entries`), 600);
   if (syncReady()) syncNow({ silent: true });
   startSyncPolling();
   document.addEventListener("visibilitychange", () => { if (!document.hidden) { syncNow({ silent: true }); startSyncPolling(); } });
