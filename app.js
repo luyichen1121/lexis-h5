@@ -70,7 +70,13 @@
   const getSettings = () => Object.assign({}, DEFAULT_SETTINGS, load(K.settings, {}));
   const setSettings = (s) => save(K.settings, s);
   const getAssess = () => load(K.assess, { known: [], level: null, estVocab: 0 });
-  const setAssess = (a) => save(K.assess, a);
+  // stamp every write so the gist merge can tell whose calibration is newer.
+  // keepStamp = this write IS the merge result, so don't re-stamp or re-arm sync.
+  const setAssess = (a, keepStamp) => {
+    if (!keepStamp) a.updatedAt = now();
+    save(K.assess, a);
+    if (!keepStamp && !_suppressAutoSync) scheduleAutoSync();
+  };
 
   function toast(msg) {
     let t = $(".toast"); if (!t) { t = el(`<div class="toast"></div>`); document.body.appendChild(t); }
@@ -714,49 +720,98 @@
   doLookup._seq = 0;
 
   // ---- NOTEBOOK ----
-  let nbFilter = "all", nbScene = null;
+  let nbFilter = "all", nbScene = null, nbSort = "new", nbQuery = "";
+  // mastery status from the SRS state (mirrors the extension's masteryOf tiers)
+  function masteryOfH5(w) {
+    const s = w.srs || {};
+    if ((s.interval || 0) >= 21) return { key: "mastered", cn: "已掌握" };
+    if ((s.lapses || 0) >= 4) return { key: "leech", cn: "易忘" };
+    if ((s.reps || 0) >= 3) return { key: "familiar", cn: "熟悉" };
+    if ((s.reps || 0) >= 1) return { key: "learning", cn: "学习中" };
+    return { key: "new", cn: "新词" };
+  }
+  const NB_BAND_ORDER = { core: 0, "very-common": 1, common: 2, mid: 3, low: 4, rare: 5 };
+  const NB_SORTS = [["new", "最新保存"], ["freq", "词频"], ["due", "待复习"], ["az", "字母"]];
+  function nbSortList(list) {
+    const l = list.slice();
+    if (nbSort === "freq") {
+      // by band first (常用→生僻), then by corpus rank inside the band
+      return l.sort((a, b) => {
+        const ba = NB_BAND_ORDER[(a.data && a.data.freq || {}).band];
+        const bb = NB_BAND_ORDER[(b.data && b.data.freq || {}).band];
+        return (ba == null ? 9 : ba) - (bb == null ? 9 : bb) || freqRankH5(a.word) - freqRankH5(b.word);
+      });
+    }
+    if (nbSort === "due") return l.sort((a, b) => ((a.srs && a.srs.due) || 0) - ((b.srs && b.srs.due) || 0));
+    if (nbSort === "az") return l.sort((a, b) => a.word.localeCompare(b.word));
+    return l.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)); // "new" (default)
+  }
   function renderNotebook() {
     const words = getWords();
     view.innerHTML = `
       <div class="subtabs" id="nbtabs">
         <button data-f="all" class="${nbFilter === "all" ? "on" : ""}">全部 ${words.length}</button>
         <button data-f="due" class="${nbFilter === "due" ? "on" : ""}">待复习 ${dueWords().length}</button>
-        <button data-f="recent" class="${nbFilter === "recent" ? "on" : ""}">最近</button>
+        <button data-f="learning" class="${nbFilter === "learning" ? "on" : ""}">学习中</button>
+        <button data-f="mastered" class="${nbFilter === "mastered" ? "on" : ""}">已掌握</button>
       </div>
+      <form class="search" id="nbsearch" style="margin-bottom:10px">
+        <input id="nbq" placeholder="搜索单词 / 释义 / 原句…" value="${esc(nbQuery)}" autocomplete="off" autocapitalize="off" spellcheck="false">
+      </form>
+      <div class="sortbar" id="nbsort">排序:${NB_SORTS.map(([k, cn]) =>
+        `<button class="catf${nbSort === k ? " on" : ""}" data-s="${k}">${cn}</button>`).join("")}</div>
       <p class="muted" style="font-size:12px;margin:0 0 10px">词后的标签是<b>词频</b>:极高频 / 高频 / 常用 / 中频 / 低频 / 生僻——越靠前越值得先掌握。</p>
       <div id="nbcats"></div>
       <div id="nblist"></div>`;
     view.querySelectorAll("#nbtabs button").forEach((b) => b.addEventListener("click", () => { nbFilter = b.dataset.f; renderNotebook(); }));
-    let list = words.slice();
-    if (nbFilter === "due") list = dueWords();
-    if (nbFilter === "recent") list = words.slice().sort((a, b) => b.createdAt - a.createdAt).slice(0, 30);
-    // category chip bar (built from the pre-scene list)
-    const cats = $("#nbcats");
-    if (cats && list.length) {
-      cats.innerHTML = catBarH5(list.map((w) => w.word), "wordNb", nbScene, "data-nbscene");
-      cats.querySelectorAll("[data-nbscene]").forEach((b) => b.addEventListener("click", () => {
-        const key = b.dataset.nbscene;
-        nbScene = (key === "__all__" || nbScene === key) ? null : key;
-        renderNotebook();
-      }));
+    view.querySelectorAll("#nbsort button").forEach((b) => b.addEventListener("click", () => { nbSort = b.dataset.s; renderNotebook(); }));
+    $("#nbsearch").addEventListener("submit", (e) => e.preventDefault());
+    const qi = $("#nbq");
+    qi.addEventListener("input", () => { nbQuery = qi.value; drawNbList(); });
+
+    function drawNbList() {
+      let list = words.slice();
+      if (nbFilter === "due") list = list.filter((w) => (w.srs ? w.srs.due : 0) <= now());
+      else if (nbFilter === "learning") list = list.filter((w) => ["learning", "familiar", "leech"].includes(masteryOfH5(w).key));
+      else if (nbFilter === "mastered") list = list.filter((w) => masteryOfH5(w).key === "mastered");
+      const q = nbQuery.trim().toLowerCase();
+      if (q) list = list.filter((w) => {
+        const d = w.data || {};
+        return w.word.toLowerCase().includes(q) || (d.cn || "").toLowerCase().includes(q) ||
+          (w.context || "").toLowerCase().includes(q) ||
+          (d.meanings || []).some((m) => (m.definition || "").toLowerCase().includes(q));
+      });
+      // category chip bar (built from the pre-scene list, so counts reflect everything)
+      const cats = $("#nbcats");
+      if (cats) {
+        cats.innerHTML = list.length ? catBarH5(list.map((w) => w.word), "wordNb", nbScene, "data-nbscene") : "";
+        cats.querySelectorAll("[data-nbscene]").forEach((b) => b.addEventListener("click", () => {
+          const key = b.dataset.nbscene;
+          nbScene = (key === "__all__" || nbScene === key) ? null : key;
+          drawNbList();
+        }));
+      }
+      if (nbScene) list = list.filter((w) => { const k = sceneOfH5(w.word, "wordNb"); return (k ? k.key : "_other") === nbScene; });
+      list = nbSortList(list);
+      const box = $("#nblist");
+      if (!list.length) {
+        box.innerHTML = `<div class="empty"><div class="big">📖</div>${q ? "没有匹配的词。" : nbScene ? "这个分类下暂无生词,点「全部」。" : "还没有生词。去「查词」保存几个吧。"}</div>`;
+        return;
+      }
+      box.innerHTML = list.map((w) => {
+        const d = w.data || {};
+        const m = masteryOfH5(w);
+        const dueIn = w.srs && w.srs.due > now() ? "下次 " + intervalLabel(Math.round((w.srs.due - now()) / DAY)) : "待复习";
+        // the old status dot said nothing useful — the frequency band does
+        const tag = w.status === "notfound" ? `<span class="mfreq nf">未找到</span>` : freqChip(d.freq);
+        return `<div class="item" data-open="${w.id}">
+          <div style="min-width:0"><div class="w serif">${esc(w.word)} ${tag} <span class="mstat m-${m.key}">${m.cn}</span></div><div class="meta">${esc(d.cn || ((d.meanings || [])[0] && d.meanings[0].definition) || "")}</div></div>
+          <span class="st chip">${dueIn}</span></div>`;
+      }).join("");
+      box.querySelectorAll("[data-open]").forEach((n) => n.addEventListener("click", () => openDetail(n.dataset.open)));
+      backfillFreq(list);
     }
-    if (nbScene) {
-      list = list.filter((w) => { const k = sceneOfH5(w.word, "wordNb"); return (k ? k.key : "_other") === nbScene; })
-        .sort((a, b) => freqRankH5(a.word) - freqRankH5(b.word)); // highest-frequency first
-    }
-    const box = $("#nblist");
-    if (!list.length) { box.innerHTML = `<div class="empty"><div class="big">📖</div>${nbScene ? "这个分类下暂无生词，点「全部」。" : "还没有生词。去「查词」保存几个吧。"}</div>`; return; }
-    box.innerHTML = list.map((w) => {
-      const d = w.data || {};
-      const dueIn = w.srs && w.srs.due > now() ? "下次 " + intervalLabel(Math.round((w.srs.due - now()) / DAY)) : "待复习";
-      // the old status dot said nothing useful — the frequency band does
-      const tag = w.status === "notfound" ? `<span class="mfreq nf">未找到</span>` : freqChip(d.freq);
-      return `<div class="item" data-open="${w.id}">
-        <div style="min-width:0"><div class="w serif">${esc(w.word)} ${tag}</div><div class="meta">${esc(d.cn || ((d.meanings || [])[0] && d.meanings[0].definition) || "")}</div></div>
-        <span class="st chip">${dueIn}</span></div>`;
-    }).join("");
-    box.querySelectorAll("[data-open]").forEach((n) => n.addEventListener("click", () => openDetail(n.dataset.open)));
-    backfillFreq(list);
+    drawNbList();
   }
 
   // 自动增补: words saved before frequency existed (or synced in from elsewhere)
@@ -849,9 +904,31 @@
         <button class="btn" id="edit">编辑</button>
         <button class="btn" id="del">删除</button>
       </div><div id="det"></div>`;
+    const isMastered = masteryOfH5(w).key === "mastered";
     $("#det").innerHTML = cardHTML(wordToPreview(w), { examples: getSettings().showExamples, meter: true, pending: auto })
-      + contextCardHTML(w) + masteryCardHTML(w);
+      + contextCardHTML(w) + masteryCardHTML(w)
+      + `<div class="card"><h2 class="sec">操作</h2><div class="row">
+          <button class="btn" id="revNow">立即复习</button>
+          <button class="btn ${isMastered ? "" : "sage"}" id="tglMaster">${isMastered ? "取消已掌握" : "标为已掌握"}</button>
+          <button class="btn" id="resetProg">重置进度</button>
+        </div></div>`;
     wireCard($("#det"));
+    const patchSrs = (fn) => {
+      const ws = getWords(); const rec = ws.find((x) => x.id === id);
+      if (!rec) return;
+      rec.srs = fn(rec.srs || {}); rec.updatedAt = now(); setWords(ws); refreshBadge();
+    };
+    $("#revNow").addEventListener("click", () => { patchSrs((s) => Object.assign({}, s, { due: now() })); go("review"); });
+    $("#tglMaster").addEventListener("click", () => {
+      patchSrs((s) => isMastered
+        ? { due: now(), interval: 0, ease: s.ease || 2.5, reps: 0, lapses: s.lapses || 0, last: now() }
+        : { due: now() + 30 * DAY, interval: 30, ease: s.ease || 2.5, reps: Math.max(s.reps || 0, 3), lapses: s.lapses || 0, last: now() });
+      toast(isMastered ? "已取消" : "已标为已掌握"); openDetail(id);
+    });
+    $("#resetProg").addEventListener("click", () => {
+      patchSrs(() => ({ due: now(), interval: 0, ease: 2.5, reps: 0, lapses: 0, last: 0 }));
+      toast("进度已重置"); openDetail(id);
+    });
     $("#sup").addEventListener("click", () => supplement(id, true));
     if (auto) supplement(id, false);
     $("#back").addEventListener("click", () => go(current === "lookup" ? "lookup" : "notebook"));
@@ -992,10 +1069,28 @@
     getWords().forEach((w) => s.add(w.lookup));
     return s;
   }
+  // Ordering hint from the reading assessment: put the frequency bands you scored
+  // WORST on first, so Discover shows words you probably don't know instead of
+  // marching from the top of the pool every time.
+  function weakBandOrder() {
+    const a = getAssess();
+    const est = a.reading ? readingEstimate(a.reading) : null;
+    if (!est) return null;
+    const weak = est.bands.filter((b) => b.measured && b.key !== "beyond" && b.pct < 0.95)
+      .sort((x, y) => x.pct - y.pct).map((b) => b.key);
+    return weak.length ? weak : null;
+  }
   function discoverPool(kind) {
     const known = knownSet();
     const term = (x) => (typeof x === "string" ? x : x.term || x.phrase || x.word || (Array.isArray(x) ? x[0] : ""));
-    if (kind === "words") return (window.LEXIS_FREQ || []).map(term).filter((w) => w && !known.has(norm(w)) && !PROPER_NOUNS.has(norm(w)));
+    if (kind === "words") {
+      const pool = (window.LEXIS_FREQ || []).filter((x) => term(x) && !known.has(norm(term(x))) && !PROPER_NOUNS.has(norm(term(x))));
+      const order = weakBandOrder();
+      if (!order) return pool.map(term);
+      const rk = new Map(order.map((k, i) => [k, i]));
+      // stable sort → still frequency-first inside each band
+      return pool.slice().sort((a2, b2) => (rk.has(a2.band) ? rk.get(a2.band) : 99) - (rk.has(b2.band) ? rk.get(b2.band) : 99)).map(term);
+    }
     if (kind === "phrases") return (window.LEXIS_PHRASE_SEED_FLAT || []).map(term).filter((p) => p && !known.has(norm(p)));
     if (kind === "idioms") return Object.keys(window.LEXIS_IDIOM_SCENE || {}).filter((p) => !known.has(norm(p)));
     return [];
@@ -1007,7 +1102,8 @@
         <button data-d="phrases" class="${dTab === "phrases" ? "on" : ""}">短语搭配</button>
         <button data-d="idioms" class="${dTab === "idioms" ? "on" : ""}">习语</button>
       </div>
-      <p class="muted" style="font-size:13px;margin-top:0">按词频推荐，点分类学习该场景的高频词，标「已掌握」同步评估，「学习」加入生词本。</p>
+      <p class="muted" style="font-size:13px;margin-top:0">按词频推荐,点分类学习该场景的高频词,标「已掌握」同步评估,「学习」加入生词本。${
+        dTab === "words" && weakBandOrder() ? `<br>已按你的<b>阅读评估</b>优先推「${(weakBandOrder() || []).map((k) => FREQ_CN[k] || k).join(" › ")}」——你最薄弱的频段。` : ""}</p>
       <div id="dcats"></div>
       <div id="dlist"></div>
       <div class="row" style="margin-top:14px"><button class="btn" id="dmore" style="flex:1">换一批 ↻</button></div>`;
@@ -1073,6 +1169,7 @@
     const words = getWords();
     const mastered = words.filter((w) => w.srs && w.srs.interval >= 21).length;
     const knownN = new Set([].concat(a.known.map(norm), words.map((w) => w.lookup))).size;
+    const rEst = a.reading ? readingEstimate(a.reading) : null;
     view.innerHTML = `
       <div class="card">
         <h2 class="sec">概览</h2>
@@ -1084,10 +1181,15 @@
       </div>
       <div class="card">
         <h2 class="sec">词汇量估算</h2>
-        <div class="stat">${knownN.toLocaleString()}</div>
-        <div class="muted">已标记掌握 + 生词本（目标 15,000 词族）</div>
-        <div class="meter"><i style="width:${Math.min(100, (knownN / 15000) * 100)}%"></i></div>
-        <div class="row" style="margin-top:8px"><button class="btn" id="assessBtn">快速评估</button></div>
+        <div class="stat">${(rEst ? rEst.estVocab : knownN).toLocaleString()}</div>
+        <div class="muted">${rEst
+          ? `阅读评估 · 已读 ${(a.reading.passages || []).length} 篇 · 置信度 ${({ high: "高", mid: "中", low: "低" })[rEst.confidence]}(目标 15,000 词族)`
+          : "已标记掌握 + 生词本(目标 15,000 词族)· 还没做过评估"}</div>
+        <div class="meter"><i style="width:${Math.min(100, ((rEst ? rEst.estVocab : knownN) / 15000) * 100)}%"></i></div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn primary" id="readAssessBtn">📖 阅读评估${rEst ? "(继续)" : ""}</button>
+          <button class="btn" id="assessBtn">逐词勾选</button>
+        </div>
       </div>
       <div class="card">
         <h2 class="sec">设置</h2>
@@ -1109,13 +1211,14 @@
         <input type="file" id="impFile" accept="application/json" hidden>
         <div class="row" style="margin-top:8px"><button class="btn" id="stripProperNouns">清理人名/公司名/地名单词</button></div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.50.0 · 数据仅存本机浏览器</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.51.0 · 数据仅存本机浏览器</p>`;
 
     $("#setCn").addEventListener("change", (e) => { s.chinese = e.target.checked; setSettings(s); });
     $("#setEx").addEventListener("change", (e) => { s.showExamples = e.target.checked; setSettings(s); });
     $("#setAuto").addEventListener("change", (e) => { s.autoEnrich = e.target.checked; setSettings(s); });
     $("#setLimit").addEventListener("change", (e) => { s.dailyNewLimit = +e.target.value || 15; setSettings(s); });
     $("#assessBtn").addEventListener("click", startAssess);
+    $("#readAssessBtn").addEventListener("click", renderReadingPick);
     $("#setGistToken").addEventListener("change", (e) => { s.gistToken = e.target.value.trim(); setSettings(s); });
     $("#setGistId").addEventListener("change", (e) => { s.gistId = e.target.value.trim(); setSettings(s); });
     $("#syncBtn").addEventListener("click", () => cloudSync($("#syncBtn")));
@@ -1169,6 +1272,20 @@
       if (merged.length !== before) changed = true;
       _suppressAutoSync = true; setWords(merged); _suppressAutoSync = false;
     };
+    // The vocabulary calibration (已掌握 set + 阅读式评估) carries no secrets and is
+    // useless if it only lives on one device, so it rides along with the words.
+    // Whole-object newer-wins: it is a single evolving record, not a per-item list.
+    const assessPayload = () => { const a = getAssess(); return { known: a.known || [], reading: a.reading || null, estVocab: a.estVocab || 0, updatedAt: a.updatedAt || 0 }; };
+    const mergeRemoteAssess = (remote) => {
+      if (!remote) return;
+      const a = getAssess();
+      if ((remote.updatedAt || 0) <= (a.updatedAt || 0)) return;
+      if (Array.isArray(remote.known)) a.known = remote.known;
+      if (remote.reading) a.reading = remote.reading;
+      if (remote.estVocab) a.estVocab = remote.estVocab;
+      a.updatedAt = remote.updatedAt || now();
+      setAssess(a, true); changed = true;
+    };
     try {
       if (btn) btn.textContent = "拉取中…";
       let id = (s.gistId || "").trim();
@@ -1176,12 +1293,12 @@
         const r = await fetch("https://api.github.com/gists/" + id, { headers: hdr });
         if (r.ok) {
           const g = await r.json(); const f = g.files && g.files[FILE];
-          if (f && f.content) { try { const d = JSON.parse(f.content); mergeRemote(Array.isArray(d) ? d : d.words); } catch (e) {} }
+          if (f && f.content) { try { const d = JSON.parse(f.content); mergeRemote(Array.isArray(d) ? d : d.words); if (!Array.isArray(d)) mergeRemoteAssess(d.assess); } catch (e) {} }
         } else if (r.status === 404) { id = ""; }
         else if (r.status === 401) throw new Error("token 无效");
       }
       if (btn) btn.textContent = "推送中…";
-      const body = JSON.stringify({ description: "Lexis vocab sync", public: false, files: { [FILE]: { content: JSON.stringify({ words: getWords(), syncedAt: now() }) } } });
+      const body = JSON.stringify({ description: "Lexis vocab sync", public: false, files: { [FILE]: { content: JSON.stringify({ words: getWords(), assess: assessPayload(), syncedAt: now() }) } } });
       const resp = id
         ? await fetch("https://api.github.com/gists/" + id, { method: "PATCH", headers: hdr, body })
         : await fetch("https://api.github.com/gists", { method: "POST", headers: hdr, body });
@@ -1234,6 +1351,143 @@
       } catch (x) { toast("文件无效"); }
     };
     r.readAsText(f);
+  }
+
+  // ---- reading-based vocabulary assessment (阅读式评估) -------------------
+  // Read a passage, tap ONLY the words you don't know. Every other content word
+  // counts as known, so one passage supplies ~100 judgements instead of 40 taps.
+  // Engine (passages, banding, estimate) lives in vocab.js — shared with the
+  // extension so both surfaces produce the same number.
+  function readingState() {
+    const a = getAssess();
+    return a.reading || { seen: {}, unknown: [], passages: [] };
+  }
+  function readingSeenList(r) {
+    return Object.keys(r.seen || {}).map((k) => ({ key: k, band: r.seen[k] }));
+  }
+  function readingEstimate(r) {
+    if (typeof window.lexisEstimateFromReading !== "function") return null;
+    const list = readingSeenList(r);
+    if (!list.length) return null;
+    return window.lexisEstimateFromReading(list, new Set(r.unknown || []));
+  }
+
+  function renderReadingPick() {
+    const passages = window.LEXIS_PASSAGES || [];
+    const r = readingState();
+    const done = new Set(r.passages || []);
+    const est = readingEstimate(r);
+    view.innerHTML = `
+      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← 返回</button></div>
+      <div class="card">
+        <h2 class="sec">阅读式词汇量评估</h2>
+        <p class="muted" style="font-size:13px;margin:0">读一段短文,<b>只点你不认识的词</b>。没点的词都算你认识——一篇约等于 100 次判断,比一个个勾选快得多。读 2 篇以上结果更准。</p>
+        ${est ? `<div class="row" style="margin-top:10px"><span class="stat">${est.estVocab.toLocaleString()}</span><span class="muted">当前估算 · 已取样 ${est.sampled} 词 · 置信度 ${({ high: "高", mid: "中", low: "低" })[est.confidence]}</span></div>` : ""}
+      </div>
+      ${passages.map((p) => `<div class="item" data-pass="${esc(p.id)}">
+        <div style="min-width:0"><div class="w serif">${esc(p.title)}</div><div class="meta">${esc(p.cn)} · 约 ${p.text.split(/\s+/).length} 词</div></div>
+        <span class="st chip">${done.has(p.id) ? "已读 · 重读" : "开始"}</span></div>`).join("")}
+      <div class="row" style="margin-top:14px">
+        <button class="btn" id="wordwise">改用逐词勾选</button>
+        ${est ? `<button class="btn sage" id="seeRes">查看评估结果</button>` : ""}
+      </div>`;
+    $("#back").addEventListener("click", () => go("me"));
+    $("#wordwise").addEventListener("click", startAssess);
+    if ($("#seeRes")) $("#seeRes").addEventListener("click", () => renderReadingResult());
+    view.querySelectorAll("[data-pass]").forEach((n) => n.addEventListener("click", () => renderPassage(n.dataset.pass)));
+  }
+
+  function renderPassage(id) {
+    const p = (window.LEXIS_PASSAGES || []).find((x) => x.id === id);
+    if (!p) return;
+    const toks = window.lexisPassageTokens(p.text);
+    const marked = new Set();
+    view.innerHTML = `
+      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← 返回</button>
+        <span class="muted" style="margin-left:auto;font-size:12px" id="mcount">已标记 0 个生词</span></div>
+      <div class="card">
+        <h2 class="sec">${esc(p.title)}</h2>
+        <p class="muted" style="font-size:12px;margin:0 0 10px">点掉你<b>不认识</b>的词(再点一次取消)。基础词不可点,不计入统计。</p>
+        <div class="passage" id="ptext">${toks.map((t, i) => t.word
+          ? (t.band ? `<span class="rw" data-i="${i}" data-k="${esc(t.key)}" data-b="${esc(t.band)}">${esc(t.text)}</span>` : esc(t.text))
+          : esc(t.text)).join("")}</div>
+      </div>
+      <div class="row"><button class="btn primary" id="pdone" style="flex:1;padding:13px">读完了,算一下 →</button></div>`;
+    $("#back").addEventListener("click", renderReadingPick);
+    const cnt = $("#mcount");
+    view.querySelectorAll(".rw").forEach((n) => n.addEventListener("click", () => {
+      const k = n.dataset.k;
+      if (marked.has(k)) marked.delete(k); else marked.add(k);
+      view.querySelectorAll(`.rw[data-k="${CSS.escape(k)}"]`).forEach((m) => m.classList.toggle("unk", marked.has(k)));
+      cnt.textContent = `已标记 ${marked.size} 个生词`;
+    }));
+    $("#pdone").addEventListener("click", () => {
+      const a = getAssess();
+      const r = a.reading || { seen: {}, unknown: [], passages: [] };
+      const unknown = new Set(r.unknown || []);
+      const knownAdd = [];
+      view.querySelectorAll(".rw").forEach((n) => {
+        r.seen[n.dataset.k] = n.dataset.b;
+        if (marked.has(n.dataset.k)) unknown.add(n.dataset.k);
+        else { unknown.delete(n.dataset.k); knownAdd.push(n.dataset.k); }  // read and understood
+      });
+      r.unknown = Array.from(unknown);
+      r.passages = Array.from(new Set((r.passages || []).concat([p.id])));
+      r.at = now();
+      // words you read without stumbling feed the same 已掌握 set the rest of the
+      // app uses, so Discover stops offering them
+      a.known = Array.from(new Set([].concat(a.known || [], knownAdd)));
+      a.reading = r;
+      const est = readingEstimate(r);
+      if (est) { a.estVocab = est.estVocab; a.frontierRank = est.frontierRank; }
+      setAssess(a);
+      renderReadingResult();
+    });
+  }
+
+  function renderReadingResult() {
+    const r = readingState();
+    const est = readingEstimate(r);
+    if (!est) { renderReadingPick(); return; }
+    const conf = { high: "高", mid: "中", low: "低" }[est.confidence];
+    const bars = est.bands.map((b) => `
+      <div class="lvl">
+        <span class="lvl-bl mfreq freq-${b.key === "beyond" ? "rare" : b.key}">${esc(b.cn)}</span>
+        <span class="lvl-track"><i class="freq-${b.key === "beyond" ? "rare" : b.key}" style="width:${Math.round(b.pct * 100)}%"></i></span>
+        <span class="lvl-n">${b.measured ? Math.round(b.pct * 100) + "% · 取样 " + b.seen : "取样不足"}</span>
+      </div>`).join("");
+    const unk = (r.unknown || []).slice(0, 60);
+    view.innerHTML = `
+      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← 返回</button></div>
+      <div class="card">
+        <h2 class="sec">估算词汇量</h2>
+        <div class="stat">${est.estVocab.toLocaleString()}</div>
+        <div class="muted">词族 · 已读 ${(r.passages || []).length} 篇 · 取样 ${est.sampled} 词 · 置信度 ${conf}${
+          est.confidence === "high" ? "" : `<br>取样还不多,实际大概在 <b>${est.range[0].toLocaleString()}–${est.range[1].toLocaleString()}</b> 之间——再读一篇会收窄。`}</div>
+        <div class="meter"><i style="width:${Math.min(100, (est.estVocab / 15000) * 100)}%"></i></div>
+        <div class="muted" style="font-size:12px">目标 15,000 词族(无障碍看懂英美影视/播客)</div>
+      </div>
+      <div class="card"><h2 class="sec">各频段掌握度</h2>${bars}
+        <div class="muted" style="font-size:12px;margin-top:8px">按你在文中读到的词统计:该频段没点掉的比例。Discover 会优先推你最薄弱的频段。</div></div>
+      ${unk.length ? `<div class="card"><h2 class="sec">你标记的生词 · ${(r.unknown || []).length}</h2>
+        <div class="row">${unk.map((w) => `<span class="chip" data-look="${esc(w)}">${esc(w)}</span>`).join("")}</div>
+        <div class="row" style="margin-top:10px"><button class="btn sage" id="addUnk">全部加入生词本</button></div></div>` : ""}
+      <div class="row"><button class="btn" id="more" style="flex:1">再读一篇 →</button><button class="btn" id="toDisc" style="flex:1">去 Discover 学新词</button></div>`;
+    $("#back").addEventListener("click", () => go("me"));
+    $("#more").addEventListener("click", renderReadingPick);
+    $("#toDisc").addEventListener("click", () => go("discover"));
+    wireCard(view);
+    const au = $("#addUnk");
+    if (au) au.addEventListener("click", async () => {
+      const list = (readingState().unknown || []).filter((w) => !findWord(w));
+      if (!list.length) { toast("都已经在生词本里了"); return; }
+      au.disabled = true;
+      for (let i = 0; i < list.length; i++) {
+        au.textContent = `加入中 ${i + 1}/${list.length}…`;
+        saveWord(await lookupFull(list[i]));
+      }
+      toast(`已加入 ${list.length} 个词`); refreshBadge(); renderReadingResult();
+    });
   }
 
   // ---- quick assess (mark words known from a frequency-graded sample) ----

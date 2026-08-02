@@ -10,7 +10,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Lexis">
 <link rel="apple-touch-icon" href="icons/icon128.png">
-<link rel="stylesheet" href="app.css">
+<!-- ?v= busts the browser/PWA cache on every release; bump with the version -->
+<link rel="stylesheet" href="app.css?v=1.51.0">
 </head>
 <body>
   <header class="topbar">
@@ -28,7 +29,7 @@
     <button data-tab="me"><span>我的</span></button>
   </nav>
 
-  <script src="vocab.js"></script>
-  <script src="app.js"></script>
+  <script src="vocab.js?v=1.51.0"></script>
+  <script src="app.js?v=1.51.0"></script>
 </body>
 </html>

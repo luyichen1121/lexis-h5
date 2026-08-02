@@ -275,4 +275,158 @@ function lexisSingularize(word) {
   return /[^aeiou]s$/.test(l) ? cand : null;
 }
 
-if (typeof window !== "undefined") { window.LEXIS_SEED = LEXIS_SEED; window.LEXIS_SEED_FLAT = LEXIS_SEED_FLAT; window.LEXIS_FREQ = LEXIS_FREQ; window.LEXIS_COMMON = LEXIS_COMMON; window.LEXIS_MORPH = LEXIS_MORPH; window.lexisAnalyzeMorph = lexisAnalyzeMorph; window.lexisWordDomain = lexisWordDomain; window.LEXIS_SCENE_CN = LEXIS_SCENE_CN; window.lexisIdiomScene = lexisIdiomScene; window.LEXIS_PHRASE_SEED = LEXIS_PHRASE_SEED; window.LEXIS_PHRASE_SEED_FLAT = LEXIS_PHRASE_SEED_FLAT; window.lexisPhraseScene = lexisPhraseScene; window.lexisSingularize = lexisSingularize; }
+// =========================================================================
+// READING-BASED VOCABULARY ASSESSMENT · 阅读式词汇量评估
+// -------------------------------------------------------------------------
+// Ticking words one at a time is slow and unnatural. Here you read a short
+// passage and tap ONLY the words you don't know; every other content word
+// counts as a hit, so one ~230-word passage yields ~120 judgements instead of
+// 40. Passages are original prose written for this app (no copyright issue),
+// deliberately lexically rich so the mid/low/rare bands actually get sampled.
+// =========================================================================
+var LEXIS_PASSAGES = [
+  {
+    id: "retail",
+    title: "The Shape of a Store",
+    cn: "零售与消费 · 一家店的形状",
+    text:
+      "A store is an argument made in objects. Walk into any well-run shop and the merchandising is doing quiet, relentless work: the eye is steered toward a focal table, the aisles widen where the retailer wants you to linger, and the cheapest staples sit at ankle height where only the deliberate will stoop for them. None of this is accidental. Buyers plan assortments a year ahead, hedging between the perennial basics that underwrite the margin and the speculative pieces that make the floor feel alive. A single misjudged order can leave a season's inventory stranded, and the markdown that follows erodes the very profit the range was built to protect. The trade calls this discipline open-to-buy, but the underlying instinct is older than the spreadsheet. What has changed is the feedback loop. Sell-through data now arrives daily rather than quarterly, and the temptation is to chase every flicker, replenishing what moved last week until the shelves converge on a bland consensus. The merchants who endure resist that pull. They read the numbers, then override them when the numbers describe only the recent past. Taste, in this business, is not decoration; it is a forecasting instrument, and the shops that feel curated rather than assembled are almost always the ones where somebody was willing to be wrong on purpose.",
+  },
+  {
+    id: "llm",
+    title: "Working Alongside a Model",
+    cn: "和大模型一起工作 · 入门",
+    text:
+      "The first surprise, for most newcomers, is how little of the work is technical. A language model does not need to be programmed so much as briefed. You describe the task, supply the constraints, show an example or two of what good output looks like, and the model infers the rest. This makes the craft feel closer to editing than to engineering, and it rewards people who can articulate what they actually want, which is rarer than it sounds. The second surprise is how confidently a model can be wrong. It generates plausible text, not verified text, and plausibility is a treacherous proxy for truth. A citation that does not exist, a statistic invented to fit the shape of the sentence, an API that was never released — these failures are not random noise but coherent fabrications, and they slip past a skim. The remedy is unglamorous: constrain the task, ask for sources you can check, and never let the model be the only thing standing between a claim and a reader. Used with that scepticism, the tools are genuinely transformative. They collapse the distance between having an idea and testing it, and they are patient in a way collaborators cannot always afford to be. The leverage is real. So is the obligation to verify.",
+  },
+  {
+    id: "history",
+    title: "What the Archive Forgets",
+    cn: "文化与历史 · 档案遗漏的东西",
+    text:
+      "Every archive is a monument to somebody's idea of what mattered. Ledgers survive because clerks were paid to keep them; letters survive because families thought them worth a drawer. The lives that left no paper — the itinerant, the illiterate, the merely unremarkable — are not absent from history so much as inaudible in it, and the historian who mistakes silence for evidence of nothing will reconstruct a past populated entirely by the literate and the propertied. Good social history is therefore a discipline of inference. A parish register of burials, read against the price of grain, can testify to a famine nobody chronicled. A sudden proliferation of pawnbrokers' receipts betrays a wage cut that no employer would have minuted. The method is oblique and the conclusions are provisional, but the alternative — repeating the self-portrait the powerful commissioned — is worse than provisional; it is flattering and false. There is a further trap. We tend to read the past as a rehearsal for the present, arranging its confusion into a tidy sequence that culminates, conveniently, in us. Contemporaries had no such script. They improvised amid uncertainty, backed the losing side, held beliefs we find unintelligible, and were not waiting to become our ancestors. Restoring that contingency is the historian's real work, and it is harder than assembling the chronology.",
+  },
+  {
+    id: "fitness",
+    title: "The Boring Part Is the Point",
+    cn: "健身与身体 · 无聊才是关键",
+    text:
+      "Training adaptations are stubbornly unglamorous. Muscle responds to progressive overload — a little more weight, a few more repetitions, week after week — and to almost nothing else. The supplements, the elaborate splits, the equipment that promises to isolate some neglected fibre: these are the ornament, not the mechanism. What actually accrues is the accumulated tonnage of showing up. This is unwelcome news, because consistency is a duller virtue than intensity and far harder to sustain. The novice who trains to exhaustion on Monday is often too sore to move on Wednesday, and the fortnight of enthusiasm yields less than a year of moderate, unremarkable sessions. Recovery is where the adaptation happens; the session is merely the stimulus. Sleep does more for hypertrophy than any powder, and chronic under-sleeping will blunt a programme no amount of effort can rescue. There is also the question of what you are training for. Aesthetics and capability diverge sooner than people expect, and a physique optimised for photographs may be markedly less resilient than one built around carrying, climbing and getting up off the floor unaided at seventy. That last criterion is not a joke. The strength you accumulate in your forties is, in a fairly literal sense, the independence you will be spending in your eighties.",
+  },
+  {
+    id: "decision",
+    title: "Deciding Without Enough",
+    cn: "商业与决策 · 信息不足时怎么决定",
+    text:
+      "Most consequential decisions are made on inadequate information, and the executives who wait for adequacy are usually deciding by default. The useful question is not what would settle the matter but what would change my mind, and how cheaply can I find it out. That reframing turns a paralysing debate into a sequence of small, tractable experiments. It also exposes the debates that were never empirical at all — the ones where two people disagree about risk appetite and have been arguing about market share as a proxy. A second discipline is to distinguish the reversible from the irreversible. A pricing change can be rescinded in a week; a factory, an acquisition, a public promise cannot. Reversible decisions deserve speed, because the cost of being wrong is a small correction, and deliberating over them squanders the organisation's scarcest resource, which is attention. Irreversible ones deserve genuine friction, including the deliberate solicitation of dissent from whoever is most likely to be right and least likely to speak. Finally, decide who decides. Ambiguous ownership produces the peculiar corporate outcome in which everybody has been consulted, nobody has committed, and the decision emerges months later by attrition, having been made by the calendar rather than by anyone accountable for it.",
+  },
+];
+
+// band pool sizes used to convert per-band coverage into a headline number.
+// The first four mirror LEXIS_FREQ's own bands; "beyond" stands for everything
+// past the ~8.3k pool (roughly ranks 11k–17k), which is where an advanced
+// learner's remaining headroom actually lives.
+var LEXIS_BAND_SIZE = { common: 1900, mid: 2750, low: 2850, rare: 850, beyond: 5000 };
+var LEXIS_BAND_SEQ = ["common", "mid", "low", "rare", "beyond"];
+var LEXIS_BAND_LABEL = { common: "常用", mid: "中频", low: "低频", rare: "生僻", beyond: "超纲(词库外)" };
+var LEXIS_ASSESS_CORE = 2500; // basics assumed held before the pool starts
+
+// word → frequency band, or null for the basics stoplist (not worth counting).
+var _lexisBandMap = null;
+function lexisWordBand(word) {
+  if (!_lexisBandMap) {
+    _lexisBandMap = new Map();
+    for (var i = 0; i < LEXIS_FREQ.length; i++) {
+      var f = LEXIS_FREQ[i];
+      if (!_lexisBandMap.has(f.term)) _lexisBandMap.set(f.term, f.band);
+    }
+  }
+  var w = String(word || "").toLowerCase().trim();
+  if (w.length < 3) return null;
+  if (LEXIS_COMMON.has(w)) return null;
+  var b = _lexisBandMap.get(w);
+  if (b) return b;
+  // Inflected forms ("steered", "widen", "replenishing") are not in the pool,
+  // and treating them all as 超纲 would badly inflate the estimate. Try a few
+  // conservative de-inflections and score the word in its base form's band.
+  var cands = [];
+  var one = typeof lexisSingularize === "function" ? lexisSingularize(w) : null;
+  if (one) cands.push(one);
+  var m;
+  if ((m = /^(.+?)(ing|ed)$/.exec(w)) && m[1].length >= 3) {
+    cands.push(m[1], m[1] + "e");
+    if (/([^aeiou])\1$/.test(m[1])) cands.push(m[1].slice(0, -1));   // stopped → stop
+    if (/i$/.test(m[1])) cands.push(m[1].slice(0, -1) + "y");         // tidied → tidy
+  }
+  if ((m = /^(.+?)(ly|ness|est|er|ment|ion)$/.exec(w)) && m[1].length >= 4) {
+    cands.push(m[1], m[1] + "e");
+    if (/i$/.test(m[1])) cands.push(m[1].slice(0, -1) + "y");         // happily → happy
+  }
+  for (var i = 0; i < cands.length; i++) {
+    var c = cands[i];
+    if (!c || c.length < 3) continue;
+    if (LEXIS_COMMON.has(c)) return null;
+    b = _lexisBandMap.get(c);
+    if (b) return b;
+  }
+  return "beyond";
+}
+
+// Split a passage into render tokens. Word tokens carry the band they count
+// toward (null = basic/punctuation, shown as plain text and not tappable).
+function lexisPassageTokens(text) {
+  var out = [];
+  var re = /[A-Za-z][A-Za-z'’-]*/g, last = 0, m;
+  while ((m = re.exec(text))) {
+    if (m.index > last) out.push({ text: text.slice(last, m.index), word: false });
+    var raw = m[0];
+    var key = raw.toLowerCase().replace(/[’']s$/, "");
+    out.push({ text: raw, word: true, key: key, band: lexisWordBand(key) });
+    last = m.index + raw.length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last), word: false });
+  return out;
+}
+
+// Estimate vocabulary size from what was read.
+//   seen    — array of {key, band} for every countable word type encountered
+//   unknown — Set of keys the reader tapped as "don't know"
+// Per band: knownRatio = 1 − unknown/seen. estVocab = core + Σ bandSize×ratio.
+// A band with too few samples inherits a decayed version of the last measured
+// ratio rather than being scored as fully known — the honest direction to err.
+function lexisEstimateFromReading(seen, unknown) {
+  var byBand = {};
+  LEXIS_BAND_SEQ.forEach(function (b) { byBand[b] = { seen: 0, unknown: 0 }; });
+  var dedup = new Set();
+  (seen || []).forEach(function (t) {
+    if (!t || !t.band || !byBand[t.band] || dedup.has(t.key)) return;
+    dedup.add(t.key);
+    byBand[t.band].seen++;
+    if (unknown && unknown.has(t.key)) byBand[t.band].unknown++;
+  });
+  var est = LEXIS_ASSESS_CORE, bands = [], lastRatio = 1, sampled = 0;
+  LEXIS_BAND_SEQ.forEach(function (key) {
+    var b = byBand[key], measured = b.seen >= 6;
+    var ratio = measured ? 1 - b.unknown / b.seen : Math.max(0, lastRatio * 0.7);
+    if (measured) { lastRatio = ratio; sampled += b.seen; }
+    est += LEXIS_BAND_SIZE[key] * ratio;
+    bands.push({ key: key, cn: LEXIS_BAND_LABEL[key], seen: b.seen, unknown: b.unknown, pct: ratio, measured: measured });
+  });
+  var estVocab = Math.round(est / 100) * 100;
+  var confidence = sampled >= 120 ? "high" : sampled >= 60 ? "mid" : "low";
+  // A thin sample can put the point estimate near the ceiling on very little
+  // evidence, so report the honest interval alongside it — reading another
+  // passage narrows it rather than just moving the number.
+  var margin = confidence === "high" ? 0.08 : confidence === "mid" ? 0.16 : 0.28;
+  return {
+    estVocab: estVocab,
+    range: [Math.round((estVocab * (1 - margin)) / 100) * 100, Math.round((estVocab * (1 + margin)) / 100) * 100],
+    bands: bands,
+    sampled: sampled,
+    confidence: confidence,
+    // where to start Discover: the rank you've reliably reached inside the pool
+    frontierRank: Math.max(0, Math.min(LEXIS_FREQ.length - 1, Math.round(estVocab - LEXIS_ASSESS_CORE))),
+  };
+}
+
+if (typeof window !== "undefined") { window.LEXIS_SEED = LEXIS_SEED; window.LEXIS_SEED_FLAT = LEXIS_SEED_FLAT; window.LEXIS_FREQ = LEXIS_FREQ; window.LEXIS_COMMON = LEXIS_COMMON; window.LEXIS_MORPH = LEXIS_MORPH; window.lexisAnalyzeMorph = lexisAnalyzeMorph; window.lexisWordDomain = lexisWordDomain; window.LEXIS_SCENE_CN = LEXIS_SCENE_CN; window.lexisIdiomScene = lexisIdiomScene; window.LEXIS_PHRASE_SEED = LEXIS_PHRASE_SEED; window.LEXIS_PHRASE_SEED_FLAT = LEXIS_PHRASE_SEED_FLAT; window.lexisPhraseScene = lexisPhraseScene; window.lexisSingularize = lexisSingularize; window.LEXIS_PASSAGES = LEXIS_PASSAGES; window.LEXIS_BAND_SIZE = LEXIS_BAND_SIZE; window.LEXIS_BAND_SEQ = LEXIS_BAND_SEQ; window.LEXIS_BAND_LABEL = LEXIS_BAND_LABEL; window.lexisWordBand = lexisWordBand; window.lexisPassageTokens = lexisPassageTokens; window.lexisEstimateFromReading = lexisEstimateFromReading; }

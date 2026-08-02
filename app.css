@@ -178,3 +178,25 @@ select{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size
 
 /* original-sentence source line (原句语境) */
 .src{font-size:11px;color:var(--ink2);margin-top:4px;opacity:.85}
+
+/* notebook sort bar + mastery chip */
+.sortbar{display:flex;flex-wrap:wrap;gap:7px;align-items:center;font-size:12px;color:var(--ink2);margin:0 0 12px}
+.mstat{font-size:10px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--ink2);
+  vertical-align:middle;white-space:nowrap;background:var(--paper2)}
+.m-mastered{background:#eef5ec;color:#4f7a4a;border-color:#d5e6d1}
+.m-familiar{background:#f2f5f8;color:#5b7286;border-color:#dde5ec}
+.m-learning{background:#fdf3e8;color:#b5762c;border-color:#f0dcc0}
+.m-leech{background:#f6ecec;color:#a85454;border-color:#ecd5d5}
+
+/* reading-based assessment (阅读式评估) */
+.passage{font-family:Georgia,"Times New Roman",serif;font-size:17px;line-height:2.05;letter-spacing:.1px}
+.passage .rw{cursor:pointer;padding:1px 2px;border-radius:4px;
+  box-shadow:inset 0 -1px 0 var(--line);transition:background .12s}
+.passage .rw.unk{background:var(--clay);color:#fff;box-shadow:none}
+.lvl{display:flex;align-items:center;gap:8px;margin:7px 0}
+.lvl-bl{flex:0 0 auto;min-width:64px;text-align:center}
+.lvl-track{flex:1;height:8px;background:var(--paper2);border-radius:6px;overflow:hidden}
+.lvl-track > i{display:block;height:100%;background:var(--sage)}
+.lvl-track > i.freq-mid{background:#d9a441} .lvl-track > i.freq-low{background:#a583c4}
+.lvl-track > i.freq-rare{background:#c05a5a} .lvl-track > i.freq-common{background:#8fb387}
+.lvl-n{flex:0 0 auto;font-size:11px;color:var(--ink2);min-width:88px;text-align:right}
