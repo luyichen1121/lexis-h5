@@ -16,7 +16,7 @@
 
   // ---- storage ----------------------------------------------------------
   const K = { words: "lexis_words", settings: "lexis_settings", assess: "lexis_assess" };
-  const DEFAULT_SETTINGS = { chinese: true, dailyNewLimit: 15, showExamples: true, gistToken: "", gistId: "" };
+  const DEFAULT_SETTINGS = { chinese: true, dailyNewLimit: 15, showExamples: true, autoEnrich: true, gistToken: "", gistId: "" };
   function load(k, fb) { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? fb : v; } catch (e) { return fb; } }
   function save(k, v) { localStorage.setItem(k, JSON.stringify(v)); }
   // Strip punctuation a selection dragged in ("word," / “word” / (word).),
@@ -106,11 +106,85 @@
         }
         for (const m of e.meanings || [])
           for (const d of m.definitions || [])
-            if (d.definition) meanings.push({ pos: m.partOfSpeech || "", definition: d.definition, cn: "", example: d.example || "" });
+            if (d.definition) meanings.push({ pos: posShort(m.partOfSpeech), definition: d.definition, cn: "", example: d.example || "" });
       }
       return { phonetic, audioUs, audioUk, meanings };
     } catch (e) { return null; }
   }
+
+  const stripTags = (s) => String(s || "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+  const POS_SHORT = { noun: "n.", verb: "v.", adjective: "adj.", adverb: "adv.", pronoun: "pron.", preposition: "prep.",
+    conjunction: "conj.", interjection: "interj.", determiner: "det.", numeral: "num.", phrase: "phr.",
+    "prepositional phrase": "phr.", "verb phrase": "phr.", "noun phrase": "phr.", proverb: "谚语", idiom: "习语" };
+  const posShort = (p) => POS_SHORT[String(p || "").toLowerCase()] || String(p || "").toLowerCase().slice(0, 12);
+
+  // Wiktionary (free, CORS-open). The only source here that covers PHRASES and
+  // IDIOMS, and a second supply of examples for plain words.
+  async function fetchWiktionary(term) {
+    const title = term.trim().replace(/\s+/g, "_");
+    let j;
+    try { j = await jget("https://en.wiktionary.org/api/rest_v1/page/definition/" + encodeURIComponent(title)); }
+    catch (e) { return null; }
+    const en = j && j.en;
+    if (!Array.isArray(en) || !en.length) return null;
+    const senses = [], examples = [];
+    for (const block of en) {
+      const pos = posShort(block.partOfSpeech);
+      for (const d of block.definitions || []) {
+        const def = stripTags(d.definition || "");
+        if (def && def.length > 2 && senses.length < 6) senses.push({ pos, definition: def, cn: "" });
+        for (const ex of d.parsedExamples || d.examples || []) {
+          if (examples.length >= 4) break;
+          const t = stripTags(typeof ex === "string" ? ex : ex.example || ex.text || "");
+          if (t && t.length > 4) examples.push({ text: t, translation: "" });
+        }
+      }
+    }
+    return senses.length || examples.length ? { senses, examples } : null;
+  }
+
+  // Authentic example sentences from Tatoeba (human-written). The old api_v0 has
+  // no CORS headers, so H5 uses the "unstable" API, which does.
+  async function fetchTatoeba(term) {
+    let j;
+    try {
+      j = await jget("https://api.tatoeba.org/unstable/sentences?lang=eng&sort=relevance&limit=20&q=" + encodeURIComponent(term));
+    } catch (e) { return []; }
+    const rows = (j && j.data) || [];
+    let re;
+    try { re = new RegExp("\\b" + term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+"), "i"); }
+    catch (e) { return []; }
+    const out = [];
+    for (const r of rows) {
+      const text = ((r && r.text) || "").trim();
+      if (!text || !re.test(text)) continue;
+      const n = text.split(/\s+/).length;
+      if (n < 4 || n > 26) continue;            // too stubby / too rambling to learn from
+      if (out.some((o) => o.text === text)) continue;
+      out.push({ text, translation: "" });
+      if (out.length >= 4) break;
+    }
+    return out;
+  }
+
+  // Chinese translation. Google's gtx endpoint is CORS-open, free and far better
+  // than MyMemory; MyMemory stays as the fallback. Batched via newline-joining.
+  async function translateBatch(list) {
+    const items = (list || []).map((s) => String(s || "").replace(/\s+/g, " ").trim());
+    if (!items.length) return [];
+    try {
+      const j = await withTimeout(jget("https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-CN&dt=t&q=" +
+        encodeURIComponent(items.join("\n"))), 8000, null);
+      const chunks = j && j[0];
+      if (Array.isArray(chunks)) {
+        const joined = chunks.map((c) => (c && c[0]) || "").join("");
+        const parts = joined.split("\n").map((s) => s.trim());
+        if (parts.length >= items.length) return items.map((_, i) => parts[i] || "");
+      }
+    } catch (e) {}
+    return items.map(() => "");
+  }
+  async function translateOne(text) { return (await translateBatch([text]))[0] || ""; }
 
   // ---- Datamuse helpers: pos tag → short label, frequency → band, parse item -
   const DM_POS = { n: "n.", v: "v.", adj: "adj.", adv: "adv.", u: "", prop: "" };
@@ -118,12 +192,76 @@
     const t = (tags || []).find((x) => DM_POS[x] !== undefined);
     return t ? DM_POS[t] : "";
   }
-  // occurrences-per-million (Datamuse "f:") → frequency band, mirroring the extension
+  // ---- ONE canonical frequency vocabulary (same band keys/labels as the extension),
+  // shared by the notebook chip, the detail meter and the synonym tags.
+  const FREQ_CN = { core: "极高频", "very-common": "高频", common: "常用", mid: "中频", low: "低频", rare: "生僻" };
+  const FREQ_NOTE = { core: "日常核心", "very-common": "日常常用", common: "常用", mid: "偏书面", low: "书面/专业", rare: "罕见" };
+  const BAND_FILL = { core: 7, "very-common": 6, common: 5, mid: 4, low: 3, rare: 2 };
+  // occurrences-per-million (Datamuse "f:") → Zipf band, mirroring background.js
   function bandOf(f) {
-    if (f >= 50) return { key: "common", cn: "常用" };
-    if (f >= 5) return { key: "mid", cn: "中频" };
-    if (f >= 0.4) return { key: "low", cn: "低频" };
-    return { key: "rare", cn: "生僻" };
+    const zipf = Math.log10(f > 0 ? f : 1e-4) + 3;
+    let key = "rare";
+    if (zipf >= 6) key = "core";
+    else if (zipf >= 5) key = "very-common";
+    else if (zipf >= 4) key = "common";
+    else if (zipf >= 3) key = "mid";
+    else if (zipf >= 2) key = "low";
+    return { key, cn: FREQ_CN[key] };
+  }
+  // full frequency profile for the headword (Datamuse, free, no key)
+  async function fetchFreq(term) {
+    try {
+      const j = await withTimeout(jget("https://api.datamuse.com/words?max=1&md=f&sp=" + encodeURIComponent(term)), 6000, null);
+      const hit = Array.isArray(j) && j[0];
+      if (!hit || !hit.tags || norm(hit.word) !== norm(term)) return null;
+      const ftag = hit.tags.find((t) => t.indexOf("f:") === 0);
+      if (!ftag) return null;
+      const perMillion = parseFloat(ftag.slice(2));
+      if (!isFinite(perMillion) || perMillion <= 0) return null;
+      const zipf = Math.round((Math.log10(perMillion) + 3) * 100) / 100;
+      const b = bandOf(perMillion);
+      // Zipf's law: rank × frequency ≈ const. Rough, hence "≈".
+      let rankEst = Math.round(50000 / perMillion);
+      if (rankEst >= 1000) { const mag = Math.pow(10, Math.floor(Math.log10(rankEst)) - 1); rankEst = Math.round(rankEst / mag) * mag; }
+      return { perMillion: Math.round(perMillion * 1000) / 1000, zipf, band: b.key, bandCn: b.cn, rankEst };
+    } catch (e) { return null; }
+  }
+  const fmtRank = (n) => (n == null ? "" : n > 150000 ? "150k+" : n.toLocaleString("en-US"));
+  // Curated fallback band from the offline pools — Datamuse can only price single
+  // words, so idioms/phrases ("ahead of the curve") would otherwise show nothing.
+  let _curatedBands = null;
+  function curatedFreq(term) {
+    if (!_curatedBands) {
+      _curatedBands = new Map();
+      const T2B = { 2: "common", 3: "mid", 4: "mid", 5: "low", 6: "rare" };
+      const put = (t, b) => { const k = norm(t); if (k && b && !_curatedBands.has(k)) _curatedBands.set(k, b); };
+      (window.LEXIS_FREQ || []).forEach((x) => put(typeof x === "string" ? x : x.term, x && x.band));
+      (window.LEXIS_SEED_FLAT || []).forEach((s) => put(s.term, T2B[s.tier]));
+      (window.LEXIS_PHRASE_SEED_FLAT || []).forEach((s) => put(s.term, T2B[s.tier]));
+    }
+    const b = _curatedBands.get(norm(term));
+    return b ? { band: b, bandCn: FREQ_CN[b], curated: true } : null;
+  }
+  // compact band chip (notebook list + card headline)
+  function freqChip(f) {
+    if (!f || !f.band) return "";
+    return `<span class="mfreq freq-${f.band}">${FREQ_CN[f.band] || ""}</span>`;
+  }
+  // 7-segment meter for the detail / look-up card
+  function freqMeterHTML(f, isPhrase) {
+    if (!f || !f.band) return "";
+    const filled = Math.max(1, Math.min(7, Math.round(f.curated ? BAND_FILL[f.band] || 3 : f.zipf || 3)));
+    const segs = Array.from({ length: 7 }, (_, i) => `<span class="fseg ${i < filled ? "on freq-" + f.band : ""}"></span>`).join("");
+    const label = FREQ_CN[f.band] + (FREQ_NOTE[f.band] ? " · " + FREQ_NOTE[f.band] : "");
+    const nums = f.curated
+      ? "按精选词库的常用度评估"
+      : isPhrase
+        ? `Zipf ${f.zipf} · ≈ ${f.perMillion}/百万词`
+        : `Zipf ${f.zipf} · ≈ ${f.perMillion}/百万词 · 估算词频排名 ~${fmtRank(f.rankEst)}`;
+    return `<div class="card"><h2 class="sec">词频${isPhrase ? "(短语)" : ""}</h2>
+      <div class="fbars">${segs}</div>
+      <div class="finfo"><span class="fband freq-${f.band}">${esc(label)}</span><span class="fnums">${nums}</span></div>
+    </div>`;
   }
   function parseDm(it) {
     let pos = "", def = "";
@@ -182,18 +320,21 @@
           withTimeout(jget(dmURL("rel_bga", term, "max=6")), 5000, []),
           withTimeout(jget(dmURL("rel_bgb", term, "max=6")), 5000, []),
         ]);
-        const stop = COLLO_STOP;
+        // real words only — Datamuse also returns bare punctuation ("resilient .")
+        const ok = (x) => x && x.word && !COLLO_STOP.has(x.word) && /^[a-z][a-z'-]*$/i.test(x.word);
         const coll = [];
-        (after || []).filter((x) => !stop.has(x.word)).slice(0, 5).forEach((x) => coll.push({ phrase: term + " " + x.word }));
-        (before || []).filter((x) => !stop.has(x.word)).slice(0, 5).forEach((x) => coll.push({ phrase: x.word + " " + term }));
+        (after || []).filter(ok).slice(0, 5).forEach((x) => coll.push({ phrase: term + " " + x.word }));
+        (before || []).filter(ok).slice(0, 5).forEach((x) => coll.push({ phrase: x.word + " " + term }));
         out.collocations = coll.slice(0, 8);
       } catch (e) {}
     }
     return out;
   }
 
-  // Chinese gloss via MyMemory (free, CORS-open) — best effort.
+  // Chinese gloss: gtx first (better quality), MyMemory as fallback.
   async function fetchCn(term) {
+    const g = await translateOne(term);
+    if (g && !/^[\x00-\x7F]*$/.test(g)) return g;
     try {
       const j = await jget("https://api.mymemory.translated.net/get?langpair=en|zh-CN&q=" + encodeURIComponent(term));
       const t = j && j.responseData && j.responseData.translatedText;
@@ -213,38 +354,101 @@
     } catch (e) { return []; }
   }
 
-  // full lookup: merge dictionary + datamuse + morphology + cn gloss
+  // ---- core lookup: dictionaryapi.dev + Wiktionary + Datamuse + frequency + CN gloss.
+  // Wiktionary is what makes PHRASES/IDIOMS work at all here (dictionaryapi.dev is
+  // single-word only) and doubles as a second supply of examples.
   async function lookup(rawTerm) {
     const term = norm(rawTerm);
     if (!term) return { error: true };
     const isPhrase = /\s/.test(term);
-    const [dict, dm, cn] = await Promise.all([
+    const [dict, wik, dm, cn, freq] = await Promise.all([
       isPhrase ? Promise.resolve(null) : withTimeout(fetchDictionary(term), 8000, null),
+      withTimeout(fetchWiktionary(term), 8000, null),
       withTimeout(fetchDatamuse(term), 8000, { synonyms: [], synonymsRich: [], family: [], lookalikes: [], collocations: [] }),
-      getSettings().chinese ? withTimeout(fetchCn(term), 7000, "") : Promise.resolve(""),
+      // a word-for-word MT of an idiom is misleading ("领先于曲线"), so for phrases
+      // the CN gloss comes from the translated definition in phase 2 instead.
+      getSettings().chinese && !isPhrase ? withTimeout(fetchCn(term), 7000, "") : Promise.resolve(""),
+      withTimeout(fetchFreq(term), 6000, null),
     ]);
+    // meanings: dictionary senses first, Wiktionary filling the rest (deduped)
     const meanings = [];
     const seen = new Set();
-    for (const m of (dict && dict.meanings) || []) {
-      const key = m.definition.toLowerCase().replace(/[^a-z ]/g, "").split(/\s+/).slice(0, 8).join(" ");
-      if (seen.has(key)) continue; seen.add(key);
-      meanings.push(m); if (meanings.length >= 4) break;
-    }
+    const addSense = (m) => {
+      if (!m || !m.definition) return;
+      const clean = m.definition.toLowerCase().replace(/[^a-z ]/g, " ").replace(/\s+/g, " ").trim();
+      if (!clean) return;
+      const key = clean.split(" ").slice(0, 8).join(" ");
+      if (seen.has(key)) return;
+      // Wiktionary often re-states one clause of a sense dictionaryapi.dev already
+      // merged — drop anything wholly contained in (or containing) a kept sense.
+      if (meanings.some((x) => x._k.indexOf(clean) >= 0 || clean.indexOf(x._k) >= 0)) return;
+      seen.add(key);
+      meanings.push({ pos: m.pos || "", definition: m.definition, cn: m.cn || "", example: m.example || "", _k: clean });
+    };
+    ((dict && dict.meanings) || []).forEach(addSense);
+    ((wik && wik.senses) || []).forEach(addSense);
+    meanings.splice(5);
+    meanings.forEach((m) => delete m._k);
+    // examples: dictionary usage lines + Wiktionary citations (Tatoeba comes in phase 2)
     const examples = [];
-    for (const m of (dict && dict.meanings) || []) if (m.example) { examples.push({ text: m.example, translation: "" }); if (examples.length >= 3) break; }
+    const pushEx = (t) => {
+      const s = String(t || "").trim();
+      if (!s || s.length < 5 || examples.some((e) => e.text === s)) return;
+      examples.push({ text: s, translation: "" });
+    };
+    ((dict && dict.meanings) || []).forEach((m) => m.example && pushEx(m.example));
+    ((wik && wik.examples) || []).forEach((e) => pushEx(e.text));
     let morph = null;
     try { if (!isPhrase && window.lexisAnalyzeMorph) morph = window.lexisAnalyzeMorph(term); } catch (e) {}
     let suggestions = [];
     if (!meanings.length && !isPhrase) suggestions = await fetchSuggestions(term);
     return {
-      term, isPhrase, cn,
+      term, isPhrase, cn, freq: freq || curatedFreq(term),
       phonetic: (dict && dict.phonetic) || "",
       audioUs: (dict && dict.audioUs) || "", audioUk: (dict && dict.audioUk) || "",
-      meanings, examples, morph,
+      meanings, examples: examples.slice(0, 4), morph,
       synonyms: dm.synonyms, synonymsRich: dm.synonymsRich, family: dm.family,
       lookalikes: dm.lookalikes, collocations: dm.collocations, suggestions,
     };
   }
+
+  // ---- phase 2 (自动增补): top up thin example sets from Tatoeba and add the
+  // Chinese line under every example + the first senses. Mutates and returns `p`.
+  // Best-effort and idempotent, so it is safe to re-run on a saved word.
+  async function enrichPreview(p) {
+    if (!p || p.error) return p;
+    const wantCn = getSettings().chinese;
+    // Wiktionary often supplies bare collocations ("meticulous search") rather
+    // than sentences, so top up from Tatoeba unless we already have real ones,
+    // then float the sentence-like examples to the top.
+    const wordy = (t) => String(t || "").trim().split(/\s+/).length >= 5;
+    if ((p.examples || []).filter((e) => wordy(e.text)).length < 2) {
+      const more = await withTimeout(fetchTatoeba(p.term), 8000, []);
+      p.examples = (p.examples || []).concat(
+        more.filter((m) => !(p.examples || []).some((e) => e.text === m.text))
+      );
+    }
+    p.examples = (p.examples || [])
+      .map((e, i) => ({ e, i }))
+      .sort((a, b) => (wordy(b.e.text) ? 1 : 0) - (wordy(a.e.text) ? 1 : 0) || a.i - b.i)
+      .map((x) => x.e).slice(0, 4);
+    if (wantCn) {
+      const needEx = (p.examples || []).filter((e) => !e.translation);
+      const needSense = (p.meanings || []).slice(0, 3).filter((m) => !m.cn);
+      const batch = needEx.map((e) => e.text).concat(needSense.map((m) => m.definition));
+      if (batch.length) {
+        const zh = await translateBatch(batch);
+        needEx.forEach((e, i) => { if (zh[i]) e.translation = zh[i]; });
+        needSense.forEach((m, i) => { const t = zh[needEx.length + i]; if (t) m.cn = t; });
+      }
+      if (!p.cn) p.cn = ((p.meanings || [])[0] || {}).cn || await withTimeout(fetchCn(p.term), 7000, "");
+    }
+    if (!p.freq) p.freq = (await withTimeout(fetchFreq(p.term), 6000, null)) || curatedFreq(p.term);
+    p.enriched = true;
+    return p;
+  }
+  // one-shot lookup with phase 2 already applied (used when saving without a card)
+  async function lookupFull(term) { return enrichPreview(await lookup(term)); }
 
   // ---- render a word card (shared: look-up + notebook detail) -----------
   function morphHTML(morph) {
@@ -264,6 +468,7 @@
         <span class="hw serif">${esc(p.term)}</span>
         ${p.phonetic ? `<span class="phon">${esc(p.phonetic)}</span>` : ""}
         ${spk("US", p.audioUs)}
+        ${freqChip(p.freq)}
       </div>
       ${p.cn ? `<div class="cn-gloss">${esc(p.cn)}</div>` : ""}
       ${opts.saveBtn ? `<div class="row" style="margin-top:12px">${opts.saveBtn}</div>` : ""}
@@ -287,10 +492,15 @@
       h += `<div class="card"><h2 class="sec">释义</h2>` + p.meanings.map((m) =>
         `<div class="mean">${m.pos ? `<span class="pos">${esc(m.pos)}</span> ` : ""}<span class="def">${esc(m.definition)}</span>${m.cn ? `<div class="cn">${esc(m.cn)}</div>` : ""}</div>`).join("") + `</div>`;
     }
-    // 例句
-    if (p.examples && p.examples.length && (opts.examples !== false)) {
-      h += `<div class="card"><h2 class="sec">例句</h2>` + p.examples.map((e) =>
-        `<div class="ex">${hi(e.text)}${e.translation ? `<div class="tr">${esc(e.translation)}</div>` : ""}</div>`).join("") + `</div>`;
+    // 例句 — while phase 2 is still running we keep the section visible with a
+    // spinner, so a slow example source never reads as "there are no examples".
+    if (opts.examples !== false) {
+      const exs = p.examples || [];
+      if (exs.length || opts.pending) {
+        h += `<div class="card"><h2 class="sec">例句</h2>` + exs.map((e) =>
+          `<div class="ex">${hi(e.text)}${e.translation ? `<div class="tr">${esc(e.translation)}</div>` : ""}</div>`).join("") +
+          (opts.pending ? `<div class="muted" style="font-size:12px"><span class="spin"></span> 正在增补例句与中文…</div>` : "") + `</div>`;
+      }
     }
     // 常用搭配 (collocations)
     if (p.collocations && p.collocations.length) {
@@ -314,6 +524,8 @@
       h += `<div class="card"><h2 class="sec">形近词</h2>` + p.lookalikes.map((c) =>
         `<div class="conf"><button class="conf-w" data-look="${esc(c.word)}">${esc(c.word)}</button><span class="conf-d">${esc(c.definition || c.cn || "")}</span></div>`).join("") + `</div>`;
     }
+    // 词频 (detail-only, like the extension: a measured stat, not part of the meaning)
+    if (opts.meter) h += freqMeterHTML(p.freq, p.isPhrase);
     return h;
   }
   function wireCard(root) {
@@ -334,7 +546,7 @@
       sightings: p.context ? [{ context: p.context, at: now(), source: p.source || "粘贴保存" }] : [],
       status: p.meanings.length || p.cn ? "ready" : "notfound",
       data: {
-        phonetic: p.phonetic, audioUs: p.audioUs, audioUk: p.audioUk, cn: p.cn,
+        phonetic: p.phonetic, audioUs: p.audioUs, audioUk: p.audioUk, cn: p.cn, freq: p.freq || null,
         meanings: p.meanings, examples: p.examples, morph: p.morph,
         synonyms: p.synonyms, synonymsRich: p.synonymsRich, family: p.family,
         lookalikes: p.lookalikes, collocations: p.collocations, isPhrase: p.isPhrase,
@@ -347,9 +559,47 @@
   function removeWord(id) { setWords(getWords().filter((w) => w.id !== id)); }
   function wordToPreview(w) {
     const d = w.data || {};
-    return { term: w.word, isPhrase: d.isPhrase, cn: d.cn, phonetic: d.phonetic, audioUs: d.audioUs, audioUk: d.audioUk,
+    return { term: w.word, isPhrase: d.isPhrase, cn: d.cn, freq: d.freq || null, phonetic: d.phonetic, audioUs: d.audioUs, audioUk: d.audioUk,
       meanings: d.meanings || [], examples: d.examples || [], morph: d.morph, synonyms: d.synonyms || [],
       synonymsRich: d.synonymsRich || [], family: d.family || [], lookalikes: d.lookalikes || [], collocations: d.collocations || [], extraLoaded: true };
+  }
+  // Non-destructive merge of a fresh preview into a saved word: only ADD or
+  // improve fields, never wipe one a transiently-down source returned empty
+  // (same rule as the extension's enrich()). Returns true if anything changed.
+  function mergeIntoWord(id, p) {
+    if (!p || p.error) return false;
+    const words = getWords();
+    const rec = words.find((w) => w.id === id);
+    if (!rec) return false;
+    const d = rec.data || (rec.data = {});
+    let changed = false;
+    const fill = (k, v, better) => {
+      const cur = d[k];
+      const has = Array.isArray(cur) ? cur.length : !!cur;
+      const good = Array.isArray(v) ? v.length : !!v;
+      if (!good) return;
+      if (!has || (better && better(cur, v))) { d[k] = v; changed = true; }
+    };
+    const longer = (a, b) => (Array.isArray(b) ? b.length > (a || []).length : false);
+    fill("phonetic", p.phonetic); fill("audioUs", p.audioUs); fill("audioUk", p.audioUk);
+    fill("cn", p.cn); fill("freq", p.freq); fill("morph", p.morph);
+    fill("meanings", p.meanings, longer);
+    fill("examples", p.examples, longer);
+    fill("collocations", p.collocations, longer);
+    fill("synonyms", p.synonyms, longer);
+    fill("synonymsRich", p.synonymsRich, longer);
+    fill("family", p.family, longer);
+    fill("lookalikes", p.lookalikes, longer);
+    // examples/senses that gained a Chinese line count as an improvement too
+    const cnGain = (arr, key) => (arr || []).some((x) => x && x[key]);
+    if (p.examples && cnGain(p.examples, "translation") && !cnGain(d.examples, "translation")) { d.examples = p.examples; changed = true; }
+    if (p.meanings && cnGain(p.meanings, "cn") && !cnGain(d.meanings, "cn")) { d.meanings = p.meanings; changed = true; }
+    if (changed) {
+      if (rec.status === "notfound" && (d.meanings || []).length) rec.status = "ready";
+      rec.updatedAt = now();
+      setWords(words);
+    }
+    return changed;
   }
 
   // ---- SRS (ported from extension app.js) -------------------------------
@@ -403,7 +653,7 @@
     const recent = getWords().slice(0, 8);
     if (recent.length) $("#result").innerHTML =
       `<h2 class="sec">最近保存</h2>` + recent.map((w) =>
-        `<div class="item" data-open="${w.id}"><span class="dot ${w.status}"></span><span class="w serif">${esc(w.word)}</span><span class="meta">${esc((w.data && w.data.cn) || "")}</span></div>`).join("");
+        `<div class="item" data-open="${w.id}"><span class="w serif">${esc(w.word)}</span>${freqChip(w.data && w.data.freq)}<span class="meta">${esc((w.data && w.data.cn) || "")}</span></div>`).join("");
     view.querySelectorAll("[data-open]").forEach((n) => n.addEventListener("click", () => openDetail(n.dataset.open)));
   }
 
@@ -416,36 +666,52 @@
     const q = $("#q"); if (q) q.value = term;
     const box = $("#result");
     box.innerHTML = `<div class="empty"><span class="spin"></span> 查询中…</div>`;
+    const seq = ++doLookup._seq;
     const p = await lookup(term);
+    if (seq !== doLookup._seq) return;             // a newer look-up已经开始
     if (ctx) p.context = ctx;
-    const existing = findWord(term);
-    // is this exact sentence already recorded on the saved word?
-    const ctxKnown = !ctx || (existing && (existing.sightings || []).some((s) => (s.context || "").trim() === ctx) || (existing && (existing.context || "").trim() === ctx));
-    let saveBtn;
-    if (!existing) saveBtn = `<button class="btn sage" id="saveBtn">保存到生词本</button>`;
-    else if (ctx && !ctxKnown) saveBtn = `<button class="btn sage" id="appendBtn">＋ 添加此原句</button>`;
-    else saveBtn = `<button class="btn" id="savedBtn" disabled>已在生词本</button>`;
-    const ctxCard = ctx ? contextCardHTML({ word: p.term || term, context: ctx, createdAt: now() }) : "";
-    box.innerHTML = ctxCard + cardHTML(p, { saveBtn });
-    wireCard(box);
-    const sb = $("#saveBtn");
-    if (sb) sb.addEventListener("click", () => {
-      if (ctx) p.source = "粘贴保存";
-      if (saveWord(p)) { toast(ctx ? "已保存 <b>" + esc(p.term) + "</b>(含原句)" : "已保存 <b>" + esc(p.term) + "</b>"); doLookup(term, ctx); refreshBadge(); }
-      else toast("已经在生词本里了");
-    });
-    const ab = $("#appendBtn");
-    if (ab) ab.addEventListener("click", () => {
-      const ws = getWords(); const rec = ws.find((w) => w.lookup === term);
-      if (!rec) return;
-      rec.sightings = rec.sightings || (rec.context ? [{ context: rec.context, at: rec.createdAt || now(), source: "粘贴保存" }] : []);
-      rec.sightings.unshift({ context: ctx, at: now(), source: "粘贴保存" });
-      if (!rec.context) rec.context = ctx;
-      rec.updatedAt = now(); setWords(ws); refreshBadge();
-      toast("已添加原句到 <b>" + esc(term) + "</b>");
-      doLookup(term, ctx);
-    });
+
+    // paint the card; called twice — once with the fast core, once after 自动增补
+    const paint = (pending) => {
+      const existing = findWord(term);
+      // is this exact sentence already recorded on the saved word?
+      const ctxKnown = !ctx || (existing && (existing.sightings || []).some((s) => (s.context || "").trim() === ctx) || (existing && (existing.context || "").trim() === ctx));
+      let saveBtn;
+      if (!existing) saveBtn = `<button class="btn sage" id="saveBtn">保存到生词本</button>`;
+      else if (ctx && !ctxKnown) saveBtn = `<button class="btn sage" id="appendBtn">＋ 添加此原句</button>`;
+      else saveBtn = `<button class="btn" id="savedBtn" disabled>已在生词本</button>`;
+      const ctxCard = ctx ? contextCardHTML({ word: p.term || term, context: ctx, createdAt: now() }) : "";
+      box.innerHTML = ctxCard + cardHTML(p, { saveBtn, pending, meter: true });
+      wireCard(box);
+      const sb = $("#saveBtn");
+      if (sb) sb.addEventListener("click", () => {
+        if (ctx) p.source = "粘贴保存";
+        if (saveWord(p)) { toast(ctx ? "已保存 <b>" + esc(p.term) + "</b>(含原句)" : "已保存 <b>" + esc(p.term) + "</b>"); paint(false); refreshBadge(); }
+        else toast("已经在生词本里了");
+      });
+      const ab = $("#appendBtn");
+      if (ab) ab.addEventListener("click", () => {
+        const ws = getWords(); const rec = ws.find((w) => w.lookup === term);
+        if (!rec) return;
+        rec.sightings = rec.sightings || (rec.context ? [{ context: rec.context, at: rec.createdAt || now(), source: "粘贴保存" }] : []);
+        rec.sightings.unshift({ context: ctx, at: now(), source: "粘贴保存" });
+        if (!rec.context) rec.context = ctx;
+        rec.updatedAt = now(); setWords(ws); refreshBadge();
+        toast("已添加原句到 <b>" + esc(term) + "</b>");
+        paint(false);
+      });
+    };
+    const wantExtra = getSettings().autoEnrich !== false && !p.error;
+    paint(wantExtra);
+    if (!wantExtra) return;
+    await enrichPreview(p);
+    if (seq !== doLookup._seq) return;
+    paint(false);
+    // if the word was saved from the core card, fold the supplemented data in too
+    const saved = findWord(term);
+    if (saved) mergeIntoWord(saved.id, p);
   }
+  doLookup._seq = 0;
 
   // ---- NOTEBOOK ----
   let nbFilter = "all", nbScene = null;
@@ -457,6 +723,7 @@
         <button data-f="due" class="${nbFilter === "due" ? "on" : ""}">待复习 ${dueWords().length}</button>
         <button data-f="recent" class="${nbFilter === "recent" ? "on" : ""}">最近</button>
       </div>
+      <p class="muted" style="font-size:12px;margin:0 0 10px">词后的标签是<b>词频</b>:极高频 / 高频 / 常用 / 中频 / 低频 / 生僻——越靠前越值得先掌握。</p>
       <div id="nbcats"></div>
       <div id="nblist"></div>`;
     view.querySelectorAll("#nbtabs button").forEach((b) => b.addEventListener("click", () => { nbFilter = b.dataset.f; renderNotebook(); }));
@@ -480,13 +747,40 @@
     const box = $("#nblist");
     if (!list.length) { box.innerHTML = `<div class="empty"><div class="big">📖</div>${nbScene ? "这个分类下暂无生词，点「全部」。" : "还没有生词。去「查词」保存几个吧。"}</div>`; return; }
     box.innerHTML = list.map((w) => {
+      const d = w.data || {};
       const dueIn = w.srs && w.srs.due > now() ? "下次 " + intervalLabel(Math.round((w.srs.due - now()) / DAY)) : "待复习";
+      // the old status dot said nothing useful — the frequency band does
+      const tag = w.status === "notfound" ? `<span class="mfreq nf">未找到</span>` : freqChip(d.freq);
       return `<div class="item" data-open="${w.id}">
-        <span class="dot ${w.status}"></span>
-        <div><div class="w serif">${esc(w.word)}</div><div class="meta">${esc((w.data && w.data.cn) || (w.data && (w.data.meanings || [])[0] && w.data.meanings[0].definition) || "")}</div></div>
+        <div style="min-width:0"><div class="w serif">${esc(w.word)} ${tag}</div><div class="meta">${esc(d.cn || ((d.meanings || [])[0] && d.meanings[0].definition) || "")}</div></div>
         <span class="st chip">${dueIn}</span></div>`;
     }).join("");
     box.querySelectorAll("[data-open]").forEach((n) => n.addEventListener("click", () => openDetail(n.dataset.open)));
+    backfillFreq(list);
+  }
+
+  // 自动增补: words saved before frequency existed (or synced in from elsewhere)
+  // get their band filled in quietly, a few per render, then the list redraws.
+  let _backfilling = false;
+  async function backfillFreq(list) {
+    if (_backfilling || getSettings().autoEnrich === false) return;
+    const todo = list.filter((w) => w.data && !w.data.freq && !w.data.freqTried).slice(0, 8);
+    if (!todo.length) return;
+    _backfilling = true;
+    let hit = false;
+    try {
+      for (const w of todo) {
+        const f = (await fetchFreq(w.word)) || curatedFreq(w.word);
+        const words = getWords();
+        const rec = words.find((x) => x.id === w.id);
+        if (!rec) continue;
+        rec.data = rec.data || {};
+        if (f) { rec.data.freq = f; hit = true; } else { rec.data.freqTried = true; }
+        rec.updatedAt = now();
+        setWords(words);
+      }
+    } catch (e) {} finally { _backfilling = false; }
+    if (hit && current === "notebook") renderNotebook();
   }
 
   // original-sentence card for the saved-word detail — shows every kept sighting
@@ -506,23 +800,67 @@
     return `<div class="card"><h2 class="sec">原句语境${list.length > 1 ? ` · ${list.length}` : ""}</h2>${rows}</div>`;
   }
 
+  // 掌握进度 — the SRS state the review engine already tracks, made visible
+  function masteryCardHTML(w) {
+    const s = w.srs || {};
+    const iv = s.interval || 0;
+    const pct = Math.min(100, Math.round((iv / 21) * 100)); // 21 天间隔 = 判定已掌握
+    const next = s.due ? (s.due <= now() ? "现在" : intervalLabel(Math.max(1, Math.round((s.due - now()) / DAY)))) : "现在";
+    return `<div class="card"><h2 class="sec">掌握进度</h2>
+      <div class="meter"><i style="width:${pct}%"></i></div>
+      <div class="muted" style="font-size:12px">连续答对 <b>${s.reps || 0}</b> 次 · 当前间隔 <b>${iv ? iv + " 天" : "未开始"}</b> · 下次复习 <b>${esc(next)}</b>${s.lapses ? ` · 曾卡壳 ${s.lapses} 次` : ""}</div>
+    </div>`;
+  }
+  // a saved word is "thin" if the look-up sections it should have are missing —
+  // this is what triggers the silent 自动增补 when you open it.
+  function needsSupplement(w) {
+    const d = w.data || {};
+    if (!d.freq && !d.freqTried) return true;
+    if (!(d.meanings || []).length) return true;
+    if (!(d.examples || []).length) return true;
+    if (getSettings().chinese && !(d.examples || []).some((e) => e.translation)) return true;
+    if (!(d.collocations || []).length && !(d.synonymsRich || []).length) return true;
+    return false;
+  }
+
+  // re-run the full look-up for a saved word and fold the result in
+  // non-destructively. Tried at most once per word per session so a word that
+  // genuinely has no examples doesn't re-fetch on every open.
+  const _supplemented = new Set();
+  async function supplement(id, manual) {
+    if (!manual && _supplemented.has(id)) return;
+    _supplemented.add(id);
+    const w = getWords().find((x) => x.id === id);
+    if (!w) return;
+    if (manual) toast("正在增补…");
+    const p = await lookupFull(w.word);
+    const changed = mergeIntoWord(id, p);
+    if (manual) toast(changed ? "已增补 ✓" : "没有可增补的新内容");
+    if (current === "notebook" || current === "lookup") { if ($("#det")) openDetail(id); }
+  }
+
   function openDetail(id) {
     const w = getWords().find((x) => x.id === id);
     if (!w) return;
+    const auto = getSettings().autoEnrich !== false && !_supplemented.has(id) && needsSupplement(w);
     view.innerHTML = `<div class="row" style="margin-bottom:12px">
         <button class="btn" id="back">← 返回</button>
-        <button class="btn" id="edit" style="margin-left:auto">编辑词条</button>
+        <button class="btn" id="sup" style="margin-left:auto">${auto ? "增补中…" : "增补"}</button>
+        <button class="btn" id="edit">编辑</button>
         <button class="btn" id="del">删除</button>
       </div><div id="det"></div>`;
-    $("#det").innerHTML = cardHTML(wordToPreview(w), { examples: getSettings().showExamples }) + contextCardHTML(w);
+    $("#det").innerHTML = cardHTML(wordToPreview(w), { examples: getSettings().showExamples, meter: true, pending: auto })
+      + contextCardHTML(w) + masteryCardHTML(w);
     wireCard($("#det"));
+    $("#sup").addEventListener("click", () => supplement(id, true));
+    if (auto) supplement(id, false);
     $("#back").addEventListener("click", () => go(current === "lookup" ? "lookup" : "notebook"));
     $("#del").addEventListener("click", () => { if (confirm("删除 “" + w.word + "”？")) { removeWord(id); toast("已删除"); go("notebook"); } });
     $("#edit").addEventListener("click", async () => {
       const next = cleanTerm(prompt("修改词条：", w.word) || "");
       if (!next || next === w.word) return;
       toast("正在重新查询…");
-      const p = await lookup(next);           // refetch meanings for the new term
+      const p = await lookupFull(next);       // refetch meanings + examples for the new term
       const words = getWords();
       const rec = words.find((x) => x.id === id);
       if (!rec) return;
@@ -531,11 +869,13 @@
       rec.updatedAt = now();
       rec.status = (p.meanings || []).length || p.cn ? "ready" : "notfound";
       rec.data = Object.assign({}, rec.data, {
-        phonetic: p.phonetic, audioUs: p.audioUs, audioUk: p.audioUk, cn: p.cn,
+        phonetic: p.phonetic, audioUs: p.audioUs, audioUk: p.audioUk, cn: p.cn, freq: p.freq || null, freqTried: false,
         meanings: p.meanings, examples: p.examples, morph: p.morph,
-        synonyms: p.synonyms, family: p.family, isPhrase: p.isPhrase,
+        synonyms: p.synonyms, synonymsRich: p.synonymsRich, family: p.family,
+        lookalikes: p.lookalikes, collocations: p.collocations, isPhrase: p.isPhrase,
       });
       setWords(words);
+      _supplemented.delete(id);
       toast("已更新");
       openDetail(id);
     });
@@ -566,7 +906,8 @@
         <button class="speak" id="rspk" style="font-size:26px">🔊</button>
         ${back ? `<hr class="hr">
           ${d.cn ? `<div class="cn-gloss">${esc(d.cn)}</div>` : ""}
-          ${(d.meanings || []).slice(0, 2).map((m) => `<div class="mean" style="text-align:left">${m.pos ? `<span class="pos">${esc(m.pos)}</span> ` : ""}${esc(m.definition)}</div>`).join("")}`
+          ${(d.meanings || []).slice(0, 2).map((m) => `<div class="mean" style="text-align:left">${m.pos ? `<span class="pos">${esc(m.pos)}</span> ` : ""}${esc(m.definition)}${m.cn ? `<div class="cn">${esc(m.cn)}</div>` : ""}</div>`).join("")}
+          ${(d.examples || []).slice(0, 1).map((e) => `<div class="ex" style="text-align:left">${esc(e.text)}${e.translation ? `<div class="tr">${esc(e.translation)}</div>` : ""}</div>`).join("")}`
           : `<div class="muted" style="margin-top:14px">想想它的意思</div>`}
       </div>
       ${back ? gradeBar(w) : `<button class="btn primary" id="flip" style="width:100%;padding:14px">显示释义</button>`}`;
@@ -715,7 +1056,7 @@
     box.querySelectorAll(".study").forEach((row) => {
       const term = row.dataset.term;
       row.querySelector('[data-act="learn"]').addEventListener("click", async () => {
-        toast("查询中…"); const p = await lookup(term);
+        toast("查询中…"); const p = await lookupFull(term);
         saveWord(p); toast("已加入生词本 <b>" + esc(term) + "</b>"); row.remove(); refreshBadge();
       });
       row.querySelector('[data-act="master"]').addEventListener("click", () => {
@@ -752,6 +1093,7 @@
         <h2 class="sec">设置</h2>
         <label class="set">中文释义 <input type="checkbox" id="setCn" ${s.chinese ? "checked" : ""}></label>
         <label class="set">显示例句 <input type="checkbox" id="setEx" ${s.showExamples ? "checked" : ""}></label>
+        <label class="set">自动增补(例句/中文/词频) <input type="checkbox" id="setAuto" ${s.autoEnrich !== false ? "checked" : ""}></label>
         <label class="set">每日新词上限 <input type="number" id="setLimit" value="${s.dailyNewLimit}" min="1" max="100" style="width:70px"></label>
       </div>
       <div class="card">
@@ -767,10 +1109,11 @@
         <input type="file" id="impFile" accept="application/json" hidden>
         <div class="row" style="margin-top:8px"><button class="btn" id="stripProperNouns">清理人名/公司名/地名单词</button></div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 · 数据仅存本机浏览器</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.50.0 · 数据仅存本机浏览器</p>`;
 
     $("#setCn").addEventListener("change", (e) => { s.chinese = e.target.checked; setSettings(s); });
     $("#setEx").addEventListener("change", (e) => { s.showExamples = e.target.checked; setSettings(s); });
+    $("#setAuto").addEventListener("change", (e) => { s.autoEnrich = e.target.checked; setSettings(s); });
     $("#setLimit").addEventListener("change", (e) => { s.dailyNewLimit = +e.target.value || 15; setSettings(s); });
     $("#assessBtn").addEventListener("click", startAssess);
     $("#setGistToken").addEventListener("change", (e) => { s.gistToken = e.target.value.trim(); setSettings(s); });
@@ -953,7 +1296,7 @@
       if (box) doLookup(term);
       return;
     }
-    const p = await lookup(term);
+    const p = await lookupFull(term);
     p.context = ctx; p.source = src;
     saveWord(p);
     toast(ctx ? "已保存 <b>" + esc(term) + "</b>(含原句)" : "已保存 <b>" + esc(term) + "</b>");

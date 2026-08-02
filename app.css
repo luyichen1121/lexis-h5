@@ -66,6 +66,7 @@ button.btn:active{transform:translateY(1px)}
 .mean .cn{color:var(--ink2);font-size:14px}
 .ex{border-left:2px solid var(--line);padding-left:10px;margin:8px 0;font-size:14px}
 .ex .tr{color:var(--ink2);font-size:13px}
+.ex mark{background:rgba(192,96,62,.13);color:inherit;border-radius:3px;padding:0 2px}
 
 /* morphology */
 .morph{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
@@ -145,11 +146,28 @@ select{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size
 .syn-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .syn-w{border:0;background:none;padding:0;font-size:16px;color:var(--clay);cursor:pointer;font-weight:600}
 .syn-d{color:var(--ink2);font-size:14px;margin-top:3px;line-height:1.5}
-.mfreq{font-size:10px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--ink2)}
+.mfreq{display:inline-block;font-size:10px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);
+  color:var(--ink2);vertical-align:middle;white-space:nowrap}
+.freq-core{background:#e8f1ea;color:#3d6b45;border-color:#cfe2d4}
+.freq-very-common{background:#edf4ec;color:#4a7550;border-color:#d5e6d3}
 .freq-common{background:#eef5ec;color:#4f7a4a;border-color:#d5e6d1}
 .freq-mid{background:#fdf3e8;color:#b5762c;border-color:#f0dcc0}
 .freq-low{background:#f4eef8;color:#8256a6;border-color:#e2d3ee}
 .freq-rare{background:#f6ecec;color:#a85454;border-color:#ecd5d5}
+.mfreq.nf{background:#f6ecec;color:#a85454;border-color:#ecd5d5}
+
+/* frequency meter (词频) */
+.fbars{display:flex;gap:4px;margin:2px 0 8px}
+.fseg{flex:1;height:7px;border-radius:3px;background:var(--paper2);border:1px solid var(--line)}
+.fseg.on{border-color:transparent}
+.fseg.on.freq-core,.fseg.on.freq-very-common{background:#6f9c6b}
+.fseg.on.freq-common{background:#8fb387}
+.fseg.on.freq-mid{background:#d9a441}
+.fseg.on.freq-low{background:#a583c4}
+.fseg.on.freq-rare{background:#c05a5a}
+.finfo{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.fband{font-size:11px;padding:2px 9px;border-radius:999px;border:1px solid var(--line)}
+.fnums{font-size:11px;color:var(--ink2)}
 
 /* look-alikes (形近词) */
 .conf{display:flex;gap:10px;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--line)}
