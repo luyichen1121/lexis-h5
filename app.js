@@ -18,7 +18,14 @@
   const PROPER_NOUNS = new Set("aaron adams alexander alice allen amanda andrea andrew angela ann anna anthony arthur ashley austin bailey barbara benjamin bennett betty beverly brandon brian bryant campbell carl carter catherine charles charlotte christina christine christopher clark coleman collins cruz daniel david davis deborah dennis diana diane donald donna douglas edward edwards elizabeth emily emma eric evans garcia gary george gerald gregory harold harris hayes henderson henry howard hughes jackson jacob james janet jason jeffrey jennifer jeremy jerry jesse jessica joan john johnson jonathan jones jose joseph joshua joyce judy julia julie justin karen keith kelly kenneth kevin kyle larry laura lauren lawrence lee lewis linda lisa madison margaret maria marie marilyn martha martin mary matthew melissa michael michelle mitchell moore morris murphy myers nancy nathan nelson nicholas nicole pamela parker patricia patrick paul perry peter peterson phillips powell rachel raymond rebecca richard richardson robert roberts robinson roger rogers ronald ross russell ryan samuel sandra sara sarah scott sean sharon stephanie stephen steven stewart susan thomas thompson timothy tyler victoria walter washington watson william williams wilson adidas adobe amazon bmw canon cisco dell disney ebay epson google hitachi honda ibm intel kodak mastercard mcdonald microsoft mitsubishi morgan nike nikon nokia panasonic paypal philip philips samsung siemens sony tiffany toyota verizon wordpress yahoo alabama alaska albuquerque america arizona arlington atlanta australia austria baltimore bangladesh beijing belgium berlin birmingham boston brazil california canada carolina chicago china cincinnati cleveland colorado connecticut dakota dallas delaware denmark denver detroit dublin edinburgh egypt england finland florida france georgia germany glasgow greece hampshire hawaii houston idaho illinois india indiana indonesia iowa ireland italy japan kansas kentucky kenya korea liverpool london louisiana madrid maine malaysia manchester maryland massachusetts melbourne memphis mesa mexico miami michigan milwaukee minneapolis minnesota mississippi missouri montana montreal morocco moscow nashville nebraska nevada nigeria norway oakland ohio oklahoma omaha oregon orlando ottawa pakistan paris pennsylvania philadelphia philippines phoenix pittsburgh poland portland portugal rome russia sacramento scotland seattle shanghai singapore spain sweden switzerland sydney tampa tennessee texas thailand tokyo toronto tucson tulsa utah vancouver vegas vermont vietnam virginia wales wichita wisconsin wyoming york".split(" "));
 
   // ---- storage ----------------------------------------------------------
-  const K = { words: "lexis_words", settings: "lexis_settings", assess: "lexis_assess", deleted: "lexis_deleted" };
+  const K = { words: "lexis_words", settings: "lexis_settings", assess: "lexis_assess", deleted: "lexis_deleted",
+              // Episodes recorded on the desktop. The phone keeps only a LIGHT
+              // index — title, link, and the vocabulary without its sentences —
+              // because iOS caps localStorage at ~5MB per origin and one hour of
+              // transcript is ~150KB: hoarding them here would blow the quota and
+              // take the notebook's own writes down with it. The full record is
+              // fetched from its own gist file when you open an episode.
+              videos: "lexis_video_index" };
   const DEFAULT_SETTINGS = { chinese: true, dailyNewLimit: 15, dailyGoal: 20, showExamples: true, autoEnrich: true, reviewDrill: "auto", glossLang: "both", gistToken: "", gistId: "" };
   function load(k, fb) { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? fb : v; } catch (e) { return fb; } }
   function save(k, v) { localStorage.setItem(k, JSON.stringify(v)); }
@@ -503,26 +510,68 @@
     const b = _curatedBands.get(norm(term));
     return b ? { band: b, bandCn: FREQ_CN[b], curated: true } : null;
   }
-  // compact band chip (notebook list + card headline)
-  function freqChip(f) {
-    if (!f || !f.band) return "";
-    return `<span class="mfreq freq-${f.band}">${FREQ_CN[f.band] || ""}</span>`;
+  // the shelf (band chip) AND the position on it (rank) — shared with the
+  // extension through lexisRankInfo() in vocab.js, so the two never disagree
+  function rankInfoOf(term, f) {
+    return (typeof window.lexisRankInfo === "function") ? window.lexisRankInfo(term, f) : null;
   }
-  // 7-segment meter for the detail / look-up card
-  function freqMeterHTML(f, isPhrase) {
-    if (!f || !f.band) return "";
-    const filled = Math.max(1, Math.min(7, Math.round(f.curated ? BAND_FILL[f.band] || 3 : f.zipf || 3)));
-    const segs = Array.from({ length: 7 }, (_, i) => `<span class="fseg ${i < filled ? "on freq-" + f.band : ""}"></span>`).join("");
-    const label = FREQ_CN[f.band] + (FREQ_NOTE[f.band] ? " · " + FREQ_NOTE[f.band] : "");
-    const nums = f.curated
-      ? "rated against the curated list"
-      : isPhrase
-        ? `Zipf ${f.zipf} · ≈ ${f.perMillion}/million`
-        : `Zipf ${f.zipf} · ≈ ${f.perMillion}/million · estimated rank ~${fmtRank(f.rankEst)}`;
-    return `<div class="card"><h2 class="sec">Frequency${isPhrase ? "(phrase)" : ""}</h2>
-      <div class="fbars">${segs}</div>
-      <div class="finfo"><span class="fband freq-${f.band}">${esc(label)}</span><span class="fnums">${nums}</span></div>
-    </div>`;
+  // compact band chip + rank (notebook list + card headline)
+  // ONE frequency vocabulary across all three targets: the four word-family
+  // bands the extension's subtitles and notebook use, the same swatches, the
+  // same rank. H5 doesn't ship data/freqrank.txt (196KB is a bad trade on a
+  // phone), but `famRank` rides along inside data.freq through the gist, so any
+  // word the extension enriched shows the identical band here. A word H5 looked
+  // up by itself has no family rank and honestly says "unranked".
+  const BAND_LABEL = { r1: "top 10k", r2: "10\u201315k", r3: "15\u201320k", r4: "20k+", r0: "unranked" };
+  function famRankOf(term, f) {
+    if (f && f.famRank) return f.famRank;
+    const k = String(term || "").toLowerCase().trim();
+    if (/\s/.test(k) && typeof window.lexisPhraseRank === "function") {
+      const pr = window.lexisPhraseRank(k);
+      if (pr && pr.rank) return pr.rank;
+    }
+    return null;
+  }
+  function famBandOf(r) {
+    return !r ? "r0" : r <= 10000 ? "r1" : r <= 15000 ? "r2" : r <= 20000 ? "r3" : "r4";
+  }
+  function bandChip(rank) {
+    const b = famBandOf(rank);
+    return `<span class="mfreq band-${b}"><i class="bsw ${b}"></i>${BAND_LABEL[b]}</span>`;
+  }
+  // A phrase is ranked among phrases (PHaVE stops at 150, the Phrasal
+  // Expressions List at 5,504). Running that number through the word-family
+  // bands made every listed phrase "top 10k" and every other one "unranked" —
+  // two values for 677 phrases. It gets its own chip, naming its list.
+  const isMulti = (t) => /\s/.test(String(t || "").trim());
+  const phraseInfoOf = (t) =>
+    (typeof window.lexisPhraseInfo === "function") ? window.lexisPhraseInfo(String(t || "").toLowerCase().trim()) : null;
+  function phraseChip(term) {
+    const i = phraseInfoOf(term);
+    return i
+      ? `<span class="mfreq phr${i.src === "cur" ? " cur" : ""}" title="${esc(i.title)}">${esc(i.text)}</span>`
+      : `<span class="mfreq band-r0" title="Neither published phrase list ranks this one and it isn't a chunk Lexis teaches. Phrases carry no word-family rank.">not on the phrase lists</span>`;
+  }
+  function freqChip(f, term) {
+    if (isMulti(term)) return phraseChip(term);
+    const r = famRankOf(term, f);
+    if (!r) return bandChip(null);
+    return bandChip(r) + `<span class="mrank">#${r.toLocaleString("en-US")}</span>`;
+  }
+  // one line, not a 7-segment block — you opened the card to read the meaning
+  function freqMeterHTML(f, isPhrase, term) {
+    if (isMulti(term)) {
+      const i = phraseInfoOf(term);
+      if (!i) return "";
+      const note = i.src === "pv" ? "of the 149 commonest phrasal verbs"
+                 : i.src === "expr" ? "in the Phrasal Expressions List, commonest first"
+                 : "taught in Discover · no corpus rank";
+      return `<div class="freq-line">${phraseChip(term)}<span class="fnote">${esc(note)}</span></div>`;
+    }
+    const r = famRankOf(term, f);
+    if (!r) return "";
+    return `<div class="freq-line">${bandChip(r)}<span class="mrank">#${r.toLocaleString("en-US")}</span>` +
+      `<span class="fnote">of 44,796 word families, commonest first</span></div>`;
   }
   function parseDm(it) {
     let pos = "", def = "";
@@ -831,7 +880,7 @@
         <span class="hw serif">${esc(p.term)}</span>
         ${p.phonetic ? `<span class="phon">${esc(p.phonetic)}</span>` : ""}
         ${spk("US", p.audioUs)}
-        ${freqChip(p.freq)}
+        ${freqChip(p.freq, p.term)}
       </div>
       ${p.cn ? `<div class="cn-gloss">${esc(p.cn)}</div>` : ""}
       ${opts.saveBtn ? `<div class="row" style="margin-top:12px">${opts.saveBtn}</div>` : ""}
@@ -971,7 +1020,7 @@
         `<div class="conf"><button class="conf-w" data-look="${esc(c.word)}">${esc(c.word)}</button><span class="conf-d">${esc(c.definition || c.cn || "")}</span></div>`).join("") + `</div>`;
     }
     // 词频 (detail-only, like the extension: a measured stat, not part of the meaning)
-    if (opts.meter) h += freqMeterHTML(p.freq, p.isPhrase);
+    if (opts.meter) h += freqMeterHTML(p.freq, p.isPhrase || /\s/.test(p.term || ""), p.term);
     return h;
   }
   function wireCard(root) {
@@ -1177,21 +1226,11 @@
     return { removed: drop.length, merged };
   }
 
-  // ---- SRS (ported from extension app.js) -------------------------------
-  function schedule(srs, grade) {
-    let { interval = 0, ease = 2.5, reps = 0, lapses = 0 } = srs || {};
-    let due;
-    if (grade === "again") { reps = 0; lapses += 1; ease = Math.max(1.3, ease - 0.2); interval = 0; due = now() + 10 * 60000; }
-    else {
-      if (grade === "hard") ease = Math.max(1.3, ease - 0.15);
-      else if (grade === "easy") ease = Math.min(3.2, ease + 0.15);
-      if (reps === 0) interval = grade === "easy" ? 4 : 1;
-      else if (reps === 1) interval = grade === "hard" ? 3 : grade === "easy" ? 7 : 4;
-      else { const mult = grade === "hard" ? 1.2 : grade === "easy" ? ease * 1.3 : ease; interval = Math.round(interval * mult); }
-      interval = Math.max(1, interval); reps += 1; due = now() + interval * DAY;
-    }
-    return { interval, ease: Math.round(ease * 100) / 100, reps, lapses, last: now(), due };
-  }
+  // ---- SRS ---------------------------------------------------------------
+  // The scheduler lives in vocab.js, shared byte-for-byte with the extension —
+  // two copies of this drifted apart is the one thing that would make the same
+  // notebook behave differently on the phone.
+  function schedule(srs, grade) { return window.lexisSchedule(srs, grade); }
   function intervalLabel(d) { if (d < 1) return "10 min"; if (d < 30) return d + "d"; return Math.round(d / 30) + "mo"; }
   const dueWords = () => getWords().filter((w) => (w.srs ? w.srs.due : 0) <= now());
 
@@ -1315,22 +1354,39 @@
     // paint the card; called twice — once with the fast core, once after 自动增补
     const paint = (pending) => {
       const existing = findWord(term);
+      // 自动增补 repaints the card — don't yank the caret out of the sentence box
+      const oldTa = $("#ctxTa");
+      const keepTa = (oldTa && document.activeElement === oldTa) ? { v: oldTa.value, s: oldTa.selectionStart } : null;
       // is this exact sentence already recorded on the saved word?
       const ctxKnown = !ctx || (existing && (existing.sightings || []).some((s) => (s.context || "").trim() === ctx) || (existing && (existing.context || "").trim() === ctx));
       let saveBtn;
       if (!existing) saveBtn = `<button class="btn sage" id="saveBtn">Save to notebook</button>`;
       else if (ctx && !ctxKnown) saveBtn = `<button class="btn sage" id="appendBtn">＋ Add this sentence</button>`;
       else saveBtn = `<button class="btn" id="openNbBtn">📖 Already saved · open</button>`;
-      const ctxCard = ctx ? contextCardHTML({ word: p.term || term, context: ctx, createdAt: now() }) : "";
+      // Before it's saved the sentence is editable — on the phone nothing can
+      // read a sentence off the page for you, so typing one has to be possible
+      // at the moment you look the word up, not only afterwards.
+      const ctxCard = existing
+        ? (ctx ? contextCardHTML({ word: p.term || term, context: ctx, createdAt: now() }) : "")
+        : `<div class="card"><h2 class="sec">Sentence · 原句</h2>
+             <textarea class="lk-ta" id="ctxTa" rows="2" placeholder="No sentence captured — write your own">${esc(p.context || ctx || "")}</textarea>
+             <div class="muted" style="font-size:11px;margin-top:5px">Saved with the word as its original context.</div></div>`;
       box.innerHTML = `<div class="lookup-bar"><button class="btn" id="lkBack">← Notebook</button></div>`
         + ctxCard + cardHTML(p, { saveBtn, pending, meter: true, addExample: true });
+      const cta = $("#ctxTa");
+      if (cta) {
+        cta.addEventListener("input", () => { p.context = cta.value; });
+        if (keepTa) { cta.value = keepTa.v; cta.focus(); try { cta.setSelectionRange(keepTa.s, keepTa.s); } catch (e) {} }
+      }
       $("#lkBack").addEventListener("click", closeLookup);
       wireCard(box);
       wireExampleEditor(box, p, () => paint(pending));
       const sb = $("#saveBtn");
       if (sb) sb.addEventListener("click", () => {
+        const ta = $("#ctxTa");
+        if (ta) p.context = ta.value.trim();
         if (ctx) p.source = "Paste & save";
-        if (saveWord(p)) { toast(ctx ? "Saved <b>" + esc(p.term) + "</b>(with its sentence)" : "Saved <b>" + esc(p.term) + "</b>"); paint(false); refreshBadge(); }
+        if (saveWord(p)) { toast(p.context ? "Saved <b>" + esc(p.term) + "</b> (with its sentence)" : "Saved <b>" + esc(p.term) + "</b>"); paint(false); refreshBadge(); }
         else toast("Already in your notebook");
       });
       const ob = $("#openNbBtn");
@@ -1501,7 +1557,7 @@
         const composed = (cbd && window.lexisBreakdownUseful(cbd))
           ? ((cbd.gloss && cbd.gloss.en) || (cbd.parts.find((x) => x.definition) || {}).definition || "") : "";
         const tag = w.status === "notfound"
-          ? `<span class="mfreq nf">${composed ? "composed" : "not found"}</span>` : freqChip(d.freq);
+          ? `<span class="mfreq nf">${composed ? "composed" : "not found"}</span>` : freqChip(d.freq, w.word);
         return `<div class="item" data-open="${w.id}">
           <div style="min-width:0"><div class="w serif">${esc(w.word)} ${tag} <span class="mstat m-${m.key}">${m.cn}</span></div><div class="meta">${esc(d.cn || ((d.meanings || [])[0] && d.meanings[0].definition) || composed || "")}</div></div>
           <span class="st chip">${dueIn}</span></div>`;
@@ -1738,22 +1794,33 @@
     const due = dueWords();
     return revScope === "phrase" ? due.filter(isChunk) : due;
   }
-  const normAns = (s2) => String(s2 || "").toLowerCase().replace(/[^a-z' ]/g, "").replace(/\s+/g, " ").trim();
-  // Accept inflected forms — typing "going on" for "go on" is knowing the chunk,
-  // not getting it wrong. Compares word-by-word through the shared de-inflector.
-  function answerMatches(typed, expected, headword) {
-    const t = normAns(typed);
-    if (!t) return false;
-    const stems = (x) => {
-      const c = window.lexisStemCandidates ? window.lexisStemCandidates(x) : [];
-      return new Set([x].concat(c));
-    };
-    for (const target of [expected, headword]) {
-      const a = normAns(target).split(" "), b = t.split(" ");
-      if (!a.length || a.length !== b.length) continue;
-      if (a.every((wd, i) => wd === b[i] || stems(wd).has(b[i]) || stems(b[i]).has(wd))) return true;
-    }
-    return false;
+  // Answer checking lives in vocab.js as lexisCheckAnswer — it has to report WHY
+  // an answer was wrong (typo / inflection / genuinely wrong) so the card can
+  // give real feedback and derive its own grade, and both surfaces have to make
+  // that call identically.
+
+  // ---- corrective feedback ------------------------------------------------
+  // Flipping the card over and showing the answer is not feedback. The three
+  // ways of being wrong are different events and are named separately.
+  function feedbackHTML(chk) {
+    if (!chk) return "";
+    const msg = {
+      exact: "Correct",
+      inflection: `Correct — here it takes the form <b>${esc(chk.want)}</b>`,
+      typo: "Right word, spelled wrong",
+      wrong: "Not this one",
+      empty: "No answer — here it is",
+    }[chk.kind] || "";
+    const cmp = (chk.kind === "exact" || chk.kind === "empty") ? ""
+      : `<div class="rv-fb-cmp"><span class="you">${esc(chk.typed)}</span><span class="arr">→</span><span class="want">${esc(chk.want)}</span></div>`;
+    return `<div class="rv-fb ${chk.ok ? "ok" : "no"}"><div class="rv-fb-msg">${msg}</div>${cmp}</div>`;
+  }
+  // The episode a sentence was heard in — one tap back to that second.
+  function videoRefHTML(dr) {
+    const v = dr.video || (dr.sentence && dr.sentence.video);
+    if (!v || !v.url) return "";
+    const at = v.at != null ? window.lexisFmtAt(v.at) : "";
+    return `<div class="rv-vid"><a href="${esc(v.url)}" target="_blank" rel="noopener">▸ ${esc(v.title || "the episode")}${at ? " · " + at : ""}</a> <span>— where you heard it</span></div>`;
   }
 
   // ---- streak / daily progress -------------------------------------------
@@ -1832,13 +1899,23 @@
     const force = s2.reviewDrill && s2.reviewDrill !== "auto" ? s2.reviewDrill : null;
     session.drill = window.lexisBuildDrill
       ? window.lexisBuildDrill(w, getWords(), { force, lang: enOnly() ? "en" : "cn",
+          // Cards SHOWN this session — paces the tap-only breather slots and
+          // makes the session open on one. Deliberately not session.done, which
+          // on this surface counts every card but on the extension counts only
+          // the ones you got right; a shared engine needs the same input on both.
+          slot: session.shown || 0,
           seed: ((w.srs && w.srs.reps) || 0) + session.done + 1 })
       : { mode: "recall" };
     if (enOnly()) session.drill = stripCn(session.drill);
     session.drillFor = w.id;
+    // How long you took separates "knew it" from "worked it out", and it costs
+    // nothing to collect.
+    session.askedAt = now();
     return session.drill;
   }
   const DRILL_HINT_CN = {
+    en2cn: "Which of these does it mean?",
+    flip: "Decide for yourself, then turn it over.",
     sense: "Which of these is it, here??",
     word: "Which word fits this sentence??",
     cloze: "Write it into the gap.",
@@ -1847,6 +1924,8 @@
     recall: "Think first, then reveal.",
   };
   const DRILL_HINT_EN = {
+    en2cn: "Which of these does it mean?",
+    flip: "Decide for yourself, then turn it over.",
     sense: "Which of these is it, here?",
     word: "Which word fits this sentence?",
     cloze: "Write it into the gap.",
@@ -1883,7 +1962,7 @@
       ? `<span class="rv-prod${dr.produced >= dr.target ? " ok" : ""}">${T.prod(Math.min(dr.produced, dr.target), dr.target)}</span>` : "";
     // your saved sentence is often a poor example, but it does say which sense
     // you cared about — name that, then drill a different sentence
-    const os = dr.mode !== "sense" && dr.originSense && dr.originSense.confident && dr.originSense.meaning;
+    const os = ["sense", "en2cn", "flip"].indexOf(dr.mode) < 0 && dr.originSense && dr.originSense.confident && dr.originSense.meaning;
     const head = `<div class="rv-mode"><span class="rv-mode-t">${esc(dr.label || "")}</span>${need}</div>` +
       (os && dr.source !== "context"
         ? `<div class="rv-origin">${T.origin(esc(enOnly() ? (os.definition || os.cn || "") : (os.cn || os.definition || "")))}</div>` : "");
@@ -1893,10 +1972,22 @@
     const optsHTML = (list) => `<div class="rv-opts">${(list || []).map((o, i) => `<button class="rv-opt" data-opt="${i}">${esc(o)}</button>`).join("")}</div>`;
     let front;
     if (dr.mode === "sense") {
-      front = (dr.sentence ? `<div class="rv-sent">${hi(dr.sentence.text)}</div>` : `<div class="hw serif">${esc(w.word)}</div>`) + optsHTML(dr.options);
+      front = (dr.sentence ? `<div class="rv-sent">${hi(dr.sentence.text)}</div>${videoRefHTML(dr)}` : `<div class="hw serif">${esc(w.word)}</div>`) + optsHTML(dr.options);
     } else if (dr.mode === "word") {
       front = `<div class="rv-sent">${esc(dr.pre)}<span class="cz-gap">?</span>${esc(dr.post)}</div>
-        ${dr.sentenceCn ? `<div class="muted" style="font-size:13px;margin-top:8px">${esc(dr.sentenceCn)}</div>` : ""}` + optsHTML(dr.options);
+        ${dr.sentenceCn ? `<div class="muted" style="font-size:13px;margin-top:8px">${esc(dr.sentenceCn)}</div>` : ""}${videoRefHTML(dr)}` + optsHTML(dr.options);
+    } else if (dr.mode === "en2cn") {
+      // headword only — a sentence here would let you match a gloss to its
+      // topic without knowing the word, the flaw that killed single-sense 选义
+      front = `<div class="hw serif">${esc(w.word)}</div>
+        ${d.phonetic ? `<div class="phon">${esc(d.phonetic)}</div>` : ""}
+        <button class="speak" id="rspk" style="font-size:26px">🔊</button>` + optsHTML(dr.options);
+    } else if (dr.mode === "flip") {
+      // no context sentence either: it usually gives the meaning away, which
+      // would make an already criterion-free self-rating weaker still
+      front = `<div class="hw serif">${esc(w.word)}</div>
+        ${d.phonetic ? `<div class="phon">${esc(d.phonetic)}</div>` : ""}
+        <button class="speak" id="rspk" style="font-size:26px">🔊</button>`;
     } else if (dr.mode === "zh2en") {
       front = `<div class="rv-zh">${esc(dr.zh)}</div>
         <div class="rv-sent">${blank(`style="width:${Math.max(7, (dr.answer || "").length + 3)}ch" placeholder="${esc(dr.initial)}…"`)}</div>`;
@@ -1908,6 +1999,7 @@
       front = `<div class="rv-sent">${esc(dr.pre)}${blank(`style="width:${Math.max(6, (dr.answer || "").length + 2)}ch"`)}${esc(dr.post)}</div>
         ${dr.sentenceCn ? `<div class="muted" style="font-size:13px;margin-top:8px">${esc(dr.sentenceCn)}</div>` : ""}
         ${d.cn && !dr.sentenceCn ? `<div class="cn-gloss" style="font-size:14px">${esc(d.cn)}</div>` : ""}
+        ${videoRefHTML(dr)}
         ${dr.source === "mine" ? `<div class="rv-src">${T.mine}</div>` : dr.source === "context" ? `<div class="rv-src">${T.ctx}</div>` : ""}`;
     } else {
       front = `<div class="hw serif">${esc(w.word)}</div>
@@ -1922,17 +2014,18 @@
       <button class="speak" id="rspk" style="font-size:26px">🔊</button>
       ${d.cn ? `<div class="cn-gloss">${esc(d.cn)}</div>` : ""}
       ${(d.meanings || []).slice(0, 2).map((m) => `<div class="mean" style="text-align:left">${m.pos ? `<span class="pos">${esc(m.pos)}</span> ` : ""}${esc(m.definition)}${m.cn ? `<div class="cn">${esc(m.cn)}</div>` : ""}</div>`).join("")}
-      ${full ? `<div class="ex" style="text-align:left">${hi(full)}${(dr.sentenceCn || (dr.sentence && dr.sentence.cn)) ? `<div class="tr">${esc(dr.sentenceCn || dr.sentence.cn)}</div>` : ""}</div>` : ""}`;
+      ${full ? `<div class="ex" style="text-align:left">${hi(full)}${(dr.sentenceCn || (dr.sentence && dr.sentence.cn)) ? `<div class="tr">${esc(dr.sentenceCn || dr.sentence.cn)}</div>` : ""}</div>${videoRefHTML(dr)}` : ""}`;
 
-    const mcq = dr.mode === "sense" || dr.mode === "word";
+    const mcq = dr.mode === "sense" || dr.mode === "word" || dr.mode === "en2cn";
     view.innerHTML = scopeBar + `
       <div class="progress"><i style="width:${pct}%"></i></div>
       <div class="card rev-card">
         ${head}
         ${back ? answer : front}
-        ${back && session.verdict ? `<div class="verdict ${session.verdict}">${session.verdict === "ok" ? T.ok : T.no}</div>` : ""}
+        ${back && session.check ? feedbackHTML(session.check)
+          : back && session.verdict ? `<div class="verdict ${session.verdict}">${session.verdict === "ok" ? T.ok : T.no}</div>` : ""}
       </div>
-      ${back ? gradeBar(w) : (mcq ? "" : `<button class="btn primary" id="flip" style="width:100%;padding:14px">${dr.mode === "recall" ? T.reveal : T.check}</button>`)}`;
+      ${back ? gradeBar(w, dr) : (mcq ? "" : `<button class="btn primary" id="flip" style="width:100%;padding:14px">${dr.mode === "recall" || dr.mode === "flip" ? T.reveal : T.check}</button>`)}`;
     wireScope();
     const spk = $("#rspk");
     if (spk) spk.addEventListener("click", () => speak(w.word, d.audioUs));
@@ -1940,14 +2033,25 @@
     if (!back) {
       const inp = $("#czin");
       const reveal = () => {
-        if (inp && dr.answer && normAns(inp.value)) session.verdict = answerMatches(inp.value, dr.answer, w.word) ? "ok" : "no";
+        // A blank box IS an answer — it says you couldn't produce the word.
+        // Revealing with no verdict is how a miss used to become whatever grade
+        // you felt like giving it afterwards.
+        if (inp && dr.answer) {
+          session.ms = now() - (session.askedAt || now());
+          session.check = window.lexisCheckAnswer(inp.value, dr.answer, w.word, (w.data || {}).lookalikes);
+          session.verdict = session.check.ok ? "ok" : "no";
+        }
         session.showBack = true; drawCard();
       };
       const flip = $("#flip");
       if (flip) flip.addEventListener("click", reveal);
       // on a multiple-choice card the tap IS the answer
       view.querySelectorAll("[data-opt]").forEach((b) => b.addEventListener("click", () => {
-        session.verdict = String((dr.options || [])[+b.dataset.opt]) === String(dr.answer) ? "ok" : "no";
+        const chosen = (dr.options || [])[+b.dataset.opt];
+        const right = String(chosen) === String(dr.answer);
+        session.ms = now() - (session.askedAt || now());
+        session.check = { ok: right, kind: right ? "exact" : "wrong", typed: String(chosen || ""), want: String(dr.answer || "") };
+        session.verdict = right ? "ok" : "no";
         session.showBack = true; drawCard();
       }));
       if (inp) { inp.focus(); inp.addEventListener("keydown", (e) => { if (e.key === "Enter") reveal(); }); }
@@ -1958,8 +2062,34 @@
     }
   }
   // Two big targets by default (thumb-friendly); the 4-level SRS bar is one tap away.
-  function gradeBar(w) {
+  function gradeBar(w, dr) {
     const en = enOnly();
+    // A self-rated card keeps the three buttons that card has always had, but
+    // they only move the schedule — production and Mastered are unreachable
+    // from here by construction (the drill carries no sentence to mark).
+    if (dr && dr.selfRate) return `<div class="rev-two rev-three">
+      <button class="btn big-no" data-grade="again">Don't know<span class="d">back in 10 min</span></button>
+      <button class="btn" data-grade="hard">Shaky<span class="d">${intervalLabel(schedule(w.srs, "hard").interval)}</span></button>
+      <button class="btn big-yes" data-grade="good">Know it<span class="d">${intervalLabel(schedule(w.srs, "good").interval)}</span></button>
+      <span class="muted" style="font-size:11px;width:100%;text-align:center">self-marked · doesn't count toward produced</span>
+    </div>`;
+    // The card knew whether you were right. Letting you then pick your own grade
+    // was the hole in the loop — a wrong answer plus "Got it" pushed the interval
+    // out exactly as if you'd known it. When there is an objective result it now
+    // drives the schedule, and the buttons become a named override.
+    const auto = session.check ? window.lexisGradeFor(session.check, session.ms, dr) : null;
+    if (auto && !revFine) {
+      const when = auto === "again" ? "back in 10 min" : intervalLabel(schedule(w.srs, auto).interval);
+      // Factual, not a verdict on you — "Not yet" is where the word stands.
+      const said = { again: "Not yet", hard: "Nearly", good: "Got it" }[auto];
+      const over = auto === "again"
+        ? (session.check.kind === "empty" ? "" : `<button class="linklike" data-grade="good">I did know it</button> · `)
+        : `<button class="linklike" data-grade="again">I guessed</button> · `;
+      return `<div class="rev-two rev-auto">
+        <button class="btn ${auto === "again" ? "big-no" : "big-yes"}" data-grade="${auto}">Next<span class="d">${said} · ${when}</span></button>
+        <div class="rv-over">${over}<button class="linklike" id="revFine">finer grades ▾</button></div>
+      </div>`;
+    }
     if (!revFine) return `<div class="rev-two">
       <button class="btn big-no" data-grade="again">Don't know<span class="d">back in 10 min</span></button>
       <button class="btn big-yes" data-grade="good">Got it<span class="d">${intervalLabel(schedule(w.srs, "good").interval)}</span></button>
@@ -1981,20 +2111,38 @@
       // "会了" on a productive drill counts as producing the word in THAT
       // sentence; Mastered needs several different ones
       if (window.lexisMarkDrill && session.drill) {
-        window.lexisMarkDrill(rec, session.drill, g !== "again" && session.verdict !== "no");
+        window.lexisMarkDrill(rec, session.drill, g !== "again" && session.verdict !== "no",
+          session.check && session.check.kind);
       }
       rec.updatedAt = now(); setWords(words);
     }
     session.queue.shift();
-    if (g === "again" && rec) session.queue.push(rec); // re-show at end
-    else bumpRevStats();
-    session.done += 1; session.showBack = false; session.verdict = null;
+    if (g === "again" && rec) {
+      // Coming straight back is short-term memory, not review — the answer is
+      // still on screen in your head. Put a real gap in when the queue allows it.
+      const len = session.queue.length;
+      session.queue.splice(Math.min(len, Math.max(3, Math.floor(len / 2))), 0, rec);
+    } else bumpRevStats();
+    session.done += 1;
+    session.shown = (session.shown || 0) + 1;    // every card, hit or miss — paces the breathers
+    session.showBack = false; session.verdict = null;
+    session.check = null; session.ms = 0;
     session.drill = null; session.drillFor = null;
     drawCard();
   }
 
   // ---- DISCOVER (offline study lists from vocab.js) ----
+  // Discover has two halves: your own material first, the word pools after.
+  // Same split the extension got in v1.87.0 — a pool you can grind at any time
+  // shouldn't stand in front of the episode you actually watched.
+  let dSection = null;         // decided on first render: your own material if you have any
   let dTab = "words", dCursor = { words: 0, phrases: 0, pv: 0 };
+  let vidOpen = null;          // episode id being viewed
+  let vidTab = "vocab";        // vocab | script
+  let vidFilter = "new";       // new | learning | mastered | all
+  let vidSel = new Set();      // words ticked for the notebook
+  const vidFull = {};          // id → the full record, fetched on demand, memory only
+  const vidLoad = {};          // id → "loading" | "fail" — a spinner that never stops is a lie
   let dScene = { words: null, phrases: null, pv: null }; // active filter per tab
   const PAGE = 12;
   // usage-scene of a term, memoized. kind = "words"|"phrases"|"idioms" (Discover)
@@ -2091,7 +2239,7 @@
   // the honest move is to say so and push them toward phrases/idioms.
   function levelWindow(poolLen) {
     const a = getAssess();
-    const est = a.reading ? readingEstimate(a.reading) : null;
+    const est = bestEstimate();
     const v = est ? est.estVocab : a.estVocab || 0;
     if (!v) return { mode: "none", estVocab: 0 };
     const startIdx = Math.max(0, Math.round(v - 2500));
@@ -2174,8 +2322,212 @@
     return s2;
   }
 
+  // ---- My library · Videos ------------------------------------------------
+  // Episodes are RECORDED on the desktop (the phone has no YouTube sidebar) and
+  // read here. What the phone can do is the part that matters on a phone:
+  // decide which of the words go into the notebook, and re-read the transcript.
+  const videoIdx = () => load(K.videos, {}) || {};
+  // a phrase is saved the way you met it and listed in citation form, so both
+  // sides are canonicalised — otherwise a phrase you own keeps reading as new
+  function vidCanon(t) {
+    const x = norm(t);
+    if (!/\s/.test(x) || typeof window.lexisFindChunks !== "function") return x;
+    try {
+      const tk = window.lexisPhraseToks(x), m = (window.lexisFindChunks(tk) || [])[0];
+      return m && m.len === tk.length ? m.term : x;
+    } catch (e) { return x; }
+  }
+  function vidWordState(key) {
+    const k = norm(key), kc = vidCanon(k);
+    const w = getWords().find((x) => x.lookup === k || (/\s/.test(x.lookup || "") && vidCanon(x.lookup) === kc));
+    if (!w) {
+      const known = (getAssess().known || []).map(norm);
+      return known.includes(k) || known.includes(kc) ? "mastered" : "new";
+    }
+    const m = masteryOfH5(w);
+    return (w.mastered || (w.srs && w.srs.interval >= 180) || (m && m.key === "mastered")) ? "mastered" : "learning";
+  }
+  const VID_BANDS = [
+    { k: "r1", label: "Top 10k" }, { k: "r2", label: "10–15k" }, { k: "r3", label: "15–20k" },
+    { k: "r4", label: "20k+" }, { k: "r0", label: "unranked" }, { k: "ck", label: "Phrases" },
+  ];
+  // a phrase is ranked among phrases, so it never gets filed under a word band
+  const vidBandKey = (w) => (w && w.c) ? "ck"
+    : (!w || !w.r) ? "r0" : w.r <= 10000 ? "r1" : w.r <= 15000 ? "r2" : w.r <= 20000 ? "r3" : "r4";
+
+  function renderLibrary() {
+    const idx = videoIdx();
+    const ids = Object.keys(idx).sort((a, b) => (idx[b].u || 0) - (idx[a].u || 0));
+    if (!ids.length) {
+      return `<div class="empty">
+          <div class="big">📺</div>
+          <h3>No episodes yet</h3>
+          <p class="muted">Save an episode from the YouTube sidebar on your Mac and it turns up here —
+             its vocabulary, and the transcript to re-read.</p>
+          <button class="btn" data-dsec="vocab">Study word lists instead →</button>
+        </div>`;
+    }
+    return ids.map((id) => {
+      const v = idx[id];
+      const ws = v.words || [];
+      const fresh = ws.filter((w) => vidWordState(w.k || w.w) === "new");
+      const by = {};
+      fresh.forEach((w) => { const k = vidBandKey(w); by[k] = (by[k] || 0) + 1; });
+      const bars = VID_BANDS.filter((b) => by[b.k]).map((b) =>
+        `<span class="vbit"><i class="bsw ${b.k}"></i>${by[b.k]} ${esc(b.label)}</span>`).join("");
+      return `<div class="vcard" data-vid="${esc(id)}">
+          <img src="https://i.ytimg.com/vi/${esc(id)}/mqdefault.jpg" alt="" loading="lazy"/>
+          <div class="vc-b">
+            <div class="vc-t">${esc(v.t || id)}</div>
+            <div class="vc-n">${fresh.length ? `<b>${fresh.length}</b> to learn` : "all learned"}${v.partial ? " · not downloaded yet" : ""}</div>
+            ${bars ? `<div class="vc-bars">${bars}</div>` : ""}
+          </div>
+        </div>`;
+    }).join("");
+  }
+
+  // The full record — transcript and the sentence each word was said in — is
+  // fetched only when you open the episode, and kept in memory. Writing it to
+  // localStorage is what would break the phone: iOS gives the origin ~5MB.
+  async function loadVideoFull(id) {
+    if (vidFull[id]) return vidFull[id];
+    vidLoad[id] = "loading";
+    const idx = videoIdx()[id];
+    const s = getSettings();
+    const t = (s.gistToken || "").trim(), gid = (s.gistId || "").trim();
+    const hdr = t ? { Authorization: "Bearer " + t, Accept: "application/vnd.github+json" } : {};
+    try {
+      if (idx && idx.raw) {
+        const r = await fetch(idx.raw, { headers: hdr });
+        if (r.ok) { vidFull[id] = JSON.parse(await r.text()); delete vidLoad[id]; return vidFull[id]; }
+      }
+      if (gid) {
+        const r = await fetch("https://api.github.com/gists/" + gid, { headers: hdr });
+        if (r.ok) {
+          const g = await r.json();
+          const f = g.files && g.files["v-" + String(id).replace(/[^A-Za-z0-9_-]/g, "") + ".json"];
+          let txt = f && f.content;
+          if (f && !txt && f.raw_url) { const rr = await fetch(f.raw_url, { headers: hdr }); if (rr.ok) txt = await rr.text(); }
+          if (txt) { vidFull[id] = JSON.parse(txt); delete vidLoad[id]; return vidFull[id]; }
+        }
+      }
+    } catch (e) {}
+    vidLoad[id] = "fail";
+    return null;
+  }
+  // what to say while the episode's own file is (or isn't) on its way
+  function vidWaitNote(id, what) {
+    if (vidLoad[id] === "loading") return `<p class="muted" style="font-size:12px"><span class="spin"></span> Fetching ${what}…</p>`;
+    const s = getSettings();
+    return `<p class="muted" style="font-size:12px">Couldn't fetch ${what} —${(s.gistToken || "").trim() && (s.gistId || "").trim()
+      ? " the episode's file wasn't in the gist. Sync on the Mac once and try again."
+      : " set up cloud sync in Me · ⚙️ first; the transcript lives in the gist, not on this phone."}</p>`;
+  }
+
+  function renderVideoDetail() {
+    const id = vidOpen, light = videoIdx()[id] || {};
+    const full = vidFull[id];
+    const words = (full && full.words) || light.words || [];
+    const rows = words.map((w) => ({
+      w: w.w, k: w.k || norm(w.w), r: w.r || null, c: w.c ? 1 : 0,
+      s: w.s || "", at: w.at || 0, st: vidWordState(w.k || w.w),
+    }));
+    const by = {
+      new: rows.filter((x) => x.st === "new"), learning: rows.filter((x) => x.st === "learning"),
+      mastered: rows.filter((x) => x.st === "mastered"), all: rows,
+    };
+    if (!by[vidFilter].length && by.all.length) vidFilter = "all";
+    const head = `
+      <div class="row" style="margin-bottom:10px">
+        <button class="btn" id="vidBack">← Library</button>
+        <a class="btn" href="${esc(light.url || full && full.url || "")}" target="_blank" rel="noopener">Watch ↗</a>
+      </div>
+      <h2 class="serif" style="margin:0 0 2px;font-size:20px">${esc(light.t || (full && full.title) || id)}</h2>
+      <div class="muted" style="font-size:12px;margin-bottom:10px">${rows.length} words · <b>${by.new.length}</b> not learned yet${full ? ` · ${(full.lines || []).length} lines` : ""}</div>
+      <div class="subtabs" id="vtabs">
+        <button data-vt="vocab" class="${vidTab === "vocab" ? "on" : ""}">Vocabulary</button>
+        <button data-vt="script" class="${vidTab === "script" ? "on" : ""}">Transcript</button>
+      </div>`;
+
+    if (vidTab === "script") {
+      if (!full) return head + `<div class="empty">${vidWaitNote(id, "the transcript")}</div>`;
+      const byKey = {}; rows.forEach((x) => { byKey[x.k] = x; });
+      const lines = (full.lines || []).map((l) => {
+        const toks = (typeof window.lexisPassageTokens === "function")
+          ? window.lexisPassageTokens(l.x) : [{ text: l.x, word: false }];
+        const at = [], lw = [];
+        toks.forEach((t, j) => { if (t.word) { at.push(j); lw.push(t.key || t.text.toLowerCase()); } });
+        const opens = {}, closes = {};
+        if (typeof window.lexisFindChunks === "function" && lw.length > 1) {
+          try { (window.lexisFindChunks(lw) || []).forEach((c) => { opens[at[c.i]] = c; closes[at[c.i + c.len - 1]] = true; }); } catch (e) {}
+        }
+        const en = toks.map((t, j) => {
+          const c = opens[j];
+          const cs = c ? vidWordState(c.term) : "";
+          const pre = c ? `<c class="ck${cs === "learning" ? " nb" : cs === "mastered" ? " mastered" : ""}" title="${esc(c.term)}">` : "";
+          const post = closes[j] ? "</c>" : "";
+          if (!t.word) return pre + esc(t.text) + post;
+          const hit = byKey[(t.key || t.text.toLowerCase())];
+          if (!hit) return pre + esc(t.text) + post;
+          const cls = hit.st === "learning" ? "nb" : hit.st === "mastered" ? "mastered" : vidBandKey(hit);
+          return pre + `<w class="${cls}" title="${esc(hit.w)}">${esc(t.text)}</w>` + post;
+        }).join("");
+        return `<div class="vline">
+            <a href="${esc(full.url)}&t=${Math.max(0, Math.floor(l.t || 0))}s" target="_blank" rel="noopener">${fmtSecH5(l.t)}</a>
+            <div><div>${en}</div>${l.z ? `<div class="vl-zh">${esc(l.z)}</div>` : ""}</div>
+          </div>`;
+      }).join("");
+      return head + `<div class="vscript">${lines || "<p class='muted'>No transcript was recorded.</p>"}</div>`;
+    }
+
+    const chip = (k, label, n) => `<button class="catf${vidFilter === k ? " on" : ""}" data-vf="${k}">${esc(label)} <b>${n}</b></button>`;
+    const list = by[vidFilter].slice().sort((a, b) =>
+      (a.c ? 1 : 0) - (b.c ? 1 : 0) || (a.r || 999999) - (b.r || 999999));
+    let out = "", lastBand = "";
+    list.forEach((x) => {
+      const b = vidBandKey(x);
+      if (b !== lastBand) {
+        lastBand = b;
+        const meta = VID_BANDS.find((z) => z.k === b);
+        out += `<div class="vgrp"><i class="bsw ${b}"></i>${esc(meta ? meta.label : b)}
+                  <b>${list.filter((y) => vidBandKey(y) === b).length}</b></div>`;
+      }
+      const tag = x.st === "learning" ? `<span class="chip">learning</span>`
+                : x.st === "mastered" ? `<span class="chip">mastered</span>` : "";
+      out += `<label class="vrow${x.st === "new" ? "" : " done"}">
+          <input type="checkbox" data-vpick="${esc(x.k)}" ${x.st === "new" ? "" : "disabled"} ${vidSel.has(x.k) ? "checked" : ""}/>
+          <div>
+            <div><span class="serif" style="font-size:16px">${esc(x.w)}</span>
+              <span class="vr">${x.c ? (x.r ? "phrase #" + x.r.toLocaleString("en-US") : "taught chunk") : (x.r ? "#" + x.r.toLocaleString("en-US") : "—")}</span>${tag}</div>
+            ${x.s ? `<div class="vs">${esc(x.s)}</div>` : ""}
+          </div>
+        </label>`;
+    });
+    return head + `
+      <div class="catbar">${chip("new", "Not learned", by.new.length)}${chip("learning", "Learning", by.learning.length)}${chip("mastered", "Mastered", by.mastered.length)}${chip("all", "All", by.all.length)}</div>
+      ${full ? "" : vidWaitNote(id, "the sentences")}
+      <div>${out || "<p class='muted'>Nothing in this group.</p>"}</div>
+      ${by.new.length ? `<div class="vact">
+        <button class="btn" id="vidAll">Select all not-learned</button>
+        <button class="btn" id="vidNone">Clear</button>
+        <button class="btn sage" id="vidAdd" ${vidSel.size ? "" : "disabled"}>＋ Add ${vidSel.size}</button>
+      </div>` : ""}`;
+  }
+  function fmtSecH5(t) {
+    t = Math.max(0, Math.floor(t || 0));
+    return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0");
+  }
+
   function renderDiscover() {
+    // Land on your own material when there is any, and on the word pools when
+    // there isn't — an empty library every time would be a door into a wall.
+    if (dSection === null) dSection = Object.keys(videoIdx()).length ? "library" : "vocab";
+    if (dSection === "library") return renderDiscoverLibrary();
     view.innerHTML = `
+      <div class="subtabs" id="dsec">
+        <button data-dsec="library" class="">My library</button>
+        <button data-dsec="vocab" class="on">Vocabulary</button>
+      </div>
       <div class="subtabs" id="dtabs">
         <button data-d="words" class="${dTab === "words" ? "on" : ""}">Words</button>
         <button data-d="pv" class="${dTab === "pv" ? "on" : ""}">Phrasal verbs</button>
@@ -2187,9 +2539,90 @@
       <div id="dlist"></div>
       <div class="row" style="margin-top:14px"><button class="btn" id="dmore" style="flex:1">Shuffle ↻</button></div>`;
     view.querySelectorAll("#dtabs button").forEach((b) => b.addEventListener("click", () => { dTab = b.dataset.d; renderDiscover(); }));
+    bindSectionSwitch();
     if ($("#dCal")) $("#dCal").addEventListener("click", () => renderReadingPick());
     $("#dmore").addEventListener("click", () => { dCursor[dTab] += PAGE; drawStudy(); });
     drawStudy();
+  }
+  function bindSectionSwitch() {
+    view.querySelectorAll("[data-dsec]").forEach((b) => b.addEventListener("click", () => {
+      dSection = b.dataset.dsec; vidOpen = null; renderDiscover();
+    }));
+  }
+  function renderDiscoverLibrary() {
+    const sec = `
+      <div class="subtabs" id="dsec">
+        <button data-dsec="library" class="on">My library</button>
+        <button data-dsec="vocab" class="">Vocabulary</button>
+      </div>`;
+    if (!vidOpen) {
+      view.innerHTML = sec + renderLibrary();
+      bindSectionSwitch();
+      view.querySelectorAll("[data-vid]").forEach((c) => c.addEventListener("click", () => {
+        vidOpen = c.dataset.vid; vidTab = "vocab"; vidFilter = "new"; vidSel.clear();
+        renderDiscover();
+        // the sentences and the transcript live in the episode's own gist file
+        loadVideoFull(vidOpen).then(() => { if (vidOpen) renderDiscover(); });
+      }));
+      return;
+    }
+    view.innerHTML = sec + renderVideoDetail();
+    bindSectionSwitch();
+    const back = $("#vidBack");
+    if (back) back.addEventListener("click", () => { vidOpen = null; vidSel.clear(); renderDiscover(); });
+    view.querySelectorAll("[data-vt]").forEach((b) => b.addEventListener("click", () => { vidTab = b.dataset.vt; renderDiscover(); }));
+    view.querySelectorAll("[data-vf]").forEach((b) => b.addEventListener("click", () => { vidFilter = b.dataset.vf; renderDiscover(); }));
+    view.querySelectorAll("[data-vpick]").forEach((c) => c.addEventListener("change", () => {
+      if (c.checked) vidSel.add(c.dataset.vpick); else vidSel.delete(c.dataset.vpick);
+      const go = $("#vidAdd");
+      if (go) { go.textContent = `＋ Add ${vidSel.size}`; go.disabled = vidSel.size === 0; }
+    }));
+    const all = $("#vidAll"), none = $("#vidNone"), add = $("#vidAdd");
+    if (all) all.addEventListener("click", () => {
+      const rec = vidFull[vidOpen] || videoIdx()[vidOpen] || {};
+      (rec.words || []).forEach((w) => { const k = w.k || norm(w.w); if (vidWordState(k) === "new") vidSel.add(k); });
+      renderDiscover();
+    });
+    if (none) none.addEventListener("click", () => { vidSel.clear(); renderDiscover(); });
+    if (add) add.addEventListener("click", () => addPickedFromVideo(add));
+  }
+  // Save the ticked words. Each one is a real look-up, so they go three at a
+  // time with the count ticking down rather than fifty requests at once — the
+  // phone is usually on the worse connection of the two.
+  async function addPickedFromVideo(btn) {
+    const rec = vidFull[vidOpen] || videoIdx()[vidOpen] || {};
+    const light = videoIdx()[vidOpen] || {};
+    const items = (rec.words || []).filter((w) => vidSel.has(w.k || norm(w.w)));
+    if (!items.length) return;
+    btn.disabled = true;
+    let done = 0, saved = 0;
+    const base = (rec.url || light.url || "").split("&")[0];
+    const one = async (w) => {
+      const term = norm(w.w);
+      try {
+        if (!findWord(term)) {
+          const p = await lookupFull(term);
+          p.context = w.s || "";
+          p.source = light.t || rec.title || "YouTube";
+          if (saveWord(p)) saved++;
+          // the episode and the second it was said at, so review can send you back
+          const rec2 = getWords().find((x) => x.lookup === term);
+          if (rec2) {
+            rec2.url = base + (w.at != null ? "&t=" + Math.max(0, Math.floor(w.at)) + "s" : "");
+            rec2.title = light.t || rec.title || "";
+            setWords(getWords());
+          }
+        }
+      } catch (e) {}
+      done++;
+      btn.textContent = `Saving ${done}/${items.length}…`;
+    };
+    const queue = items.slice();
+    await Promise.all([0, 1, 2].map(async () => { while (queue.length) await one(queue.shift()); }));
+    vidSel.clear();
+    toast(`Added <b>${saved}</b> to your notebook`);
+    refreshBadge();
+    renderDiscover();
   }
   function drawStudy() {
     const fullPool = discoverPool(dTab);
@@ -2226,6 +2659,7 @@
       const hiEx = ex ? esc(ex).replace(new RegExp("(" + term.split(/\s*\/\s*/)[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+") + "\\w*)", "i"), "<mark>$1</mark>") : "";
       return `<div class="study${ex ? " has-ex" : ""}" data-term="${esc(term)}">
         <span class="term serif">${esc(term)}</span>
+        ${(() => { const r = rankInfoOf(term, null); return r ? `<span class="mrank" title="${esc(r.title)}">${esc(r.text)}</span>` : ""; })()}
         ${scene ? `<span class="g">${esc(scene)}</span>` : ""}
         <span class="act">
           <button class="btn" data-act="learn">Learn</button>
@@ -2255,6 +2689,8 @@
     const mastered = words.filter((w) => w.srs && w.srs.interval >= 21).length;
     const knownN = new Set([].concat(a.known.map(norm), words.map((w) => w.lookup))).size;
     const rEst = a.reading ? readingEstimate(a.reading) : null;
+    const qEst = quickEstimate();
+    const bEst = bestEstimate();
     const incomplete = incompleteWords().length;
     const ck = chunkState();
     view.innerHTML = `
@@ -2268,15 +2704,20 @@
       </div>
       <div class="card">
         <h2 class="sec">Vocabulary estimate</h2>
-        <div class="stat">${(rEst ? rEst.estVocab : knownN).toLocaleString()}</div>
+        <div class="stat">${(bEst ? bEst.estVocab : knownN).toLocaleString()}</div>
         <div class="muted">${rEst
           ? `Reading assessment ·  ${(a.reading.passages || []).length}  read · confidence  ${({ high: "high", mid: "medium", low: "low" })[rEst.confidence]}(goal: 15,000 word families)`
+          : bEst
+          ? `Quick check · ${bEst.rounds} round${bEst.rounds === 1 ? "" : "s"} · ${bEst.faYes} of ${bEst.faSeen} invented words claimed (goal: 15,000 word families)`
           : "marked known + notebook (goal: 15,000 word families) · not assessed yet"}</div>
-        <div class="meter"><i style="width:${Math.min(100, ((rEst ? rEst.estVocab : knownN) / 15000) * 100)}%"></i></div>
+        <div class="meter"><i style="width:${Math.min(100, ((bEst ? bEst.estVocab : knownN) / 15000) * 100)}%"></i></div>
         <div class="row" style="margin-top:8px">
-          <button class="btn primary" id="readAssessBtn">📖 Reading assessment${rEst ? "(continue)" : ""}</button>
+          <button class="btn ${rEst || qEst ? "" : "primary"}" id="quickBtn">⚡ Quick check${qEst ? "(another round)" : "(2 min)"}</button>
+          <button class="btn ${rEst ? "" : "primary"}" id="readAssessBtn">📖 Reading assessment${rEst ? "(continue)" : ""}</button>
           <button class="btn" id="assessBtn">Tick word by word</button>
         </div>
+        ${qEst ? `<div class="muted" style="font-size:12px;margin-top:8px">Quick check: ${qEst.reliable ? `≈<b>${qEst.estVocab.toLocaleString()}</b>` : "<b>not reported</b> — too many invented words claimed"} · <button class="linklike" id="quickRes">See result</button></div>`
+          : `<div class="muted" style="font-size:12px;margin-top:8px">The quick check tags roughly one word in five as an invented one, and takes whatever share of those you claim back off your score — that correction is what makes a self-marked test worth anything.</div>`}
       </div>
       <div class="card">
         <h2 class="sec">Chunk production</h2>
@@ -2298,6 +2739,9 @@
             <button class="${s.glossLang === "en" ? "on" : ""}" data-gloss="en">English</button>
           </span></label>
         <p class="muted" style="font-size:12px;margin:-4px 0 8px;line-height:1.6">「English= English-only study:No Chinese gloss or example translation anywhere, and review options are English definitions. The Chinese stays stored — switch back any time.</p>
+        <label class="set" style="align-items:flex-start">Review card <span class="subtabs" style="margin:0;flex-wrap:wrap;justify-content:flex-end">${[["auto", "Auto"], ["en2cn", "Word→meaning"], ["cloze", "Cloze"], ["zh2en", "Meaning→word"], ["flip", "Flip card"]].map(([k, lab]) =>
+            `<button class="${(s.reviewDrill || "auto") === k ? "on" : ""}" data-drill="${k}">${lab}</button>`).join("")}</span></label>
+        <p class="muted" style="font-size:12px;margin:-4px 0 8px;line-height:1.6">Auto climbs a ladder as a word matures: pick the meaning → pick the word → write it into a sentence. <b>Flip card</b> is the classic self-marked card — it moves the schedule, but it never counts toward <b>produced</b> and can't earn <b>Mastered</b>, because you weren't asked to produce anything.</p>
         <label class="set">Show examples <input type="checkbox" id="setEx" ${s.showExamples ? "checked" : ""}></label>
         <label class="set">Auto top-up (examples / gloss / frequency) <input type="checkbox" id="setAuto" ${s.autoEnrich !== false ? "checked" : ""}></label>
         <label class="set">New words per day <input type="number" id="setLimit" value="${s.dailyNewLimit}" min="1" max="100" style="width:70px"></label>
@@ -2327,7 +2771,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.67.0 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.95.0 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
@@ -2335,6 +2779,11 @@
       $("#advToggle").textContent = open ? "⚙️ Data & sync ▴" : "⚙️ Data & sync ▾";
     });
     $("#setCn").addEventListener("change", (e) => { s.chinese = e.target.checked; setSettings(s); });
+    view.querySelectorAll("[data-drill]").forEach((b) => b.addEventListener("click", () => {
+      const s3 = getSettings(); s3.reviewDrill = b.dataset.drill; setSettings(s3);
+      if (session) { session.drill = null; session.drillFor = null; }
+      renderMe();
+    }));
     view.querySelectorAll("[data-gloss]").forEach((b) => b.addEventListener("click", () => {
       const s3 = getSettings(); s3.glossLang = b.dataset.gloss; setSettings(s3);
       if (session) { session.drill = null; session.drillFor = null; }
@@ -2345,6 +2794,8 @@
     $("#setLimit").addEventListener("change", (e) => { s.dailyNewLimit = +e.target.value || 15; setSettings(s); });
     $("#setGoal").addEventListener("change", (e) => { s.dailyGoal = +e.target.value || 20; setSettings(s); });
     $("#assessBtn").addEventListener("click", startAssess);
+    $("#quickBtn").addEventListener("click", renderQuickTest);
+    if ($("#quickRes")) $("#quickRes").addEventListener("click", renderQuickResult);
     $("#readAssessBtn").addEventListener("click", renderReadingPick);
     $("#chunkBtn").addEventListener("click", renderChunkAssess);
     if ($("#chunkRes")) $("#chunkRes").addEventListener("click", renderChunkResult);
@@ -2434,17 +2885,60 @@
     // The vocabulary calibration (Mastered set + 阅读式评估) carries no secrets and is
     // useless if it only lives on one device, so it rides along with the words.
     // Whole-object newer-wins: it is a single evolving record, not a per-item list.
-    const assessPayload = () => { const a = getAssess(); return { known: a.known || [], reading: a.reading || null, estVocab: a.estVocab || 0, updatedAt: a.updatedAt || 0 }; };
+    const assessPayload = () => { const a = getAssess(); return { known: a.known || [], reading: a.reading || null, chunk: a.chunk || null, quick: a.quick || null, estVocab: a.estVocab || 0, updatedAt: a.updatedAt || 0 }; };
     const mergeRemoteAssess = (remote) => {
       if (!remote) return;
       const a = getAssess();
       if ((remote.updatedAt || 0) <= (a.updatedAt || 0)) return;
       if (Array.isArray(remote.known)) a.known = remote.known;
       if (remote.reading) a.reading = remote.reading;
+      if (remote.chunk) a.chunk = remote.chunk;
+      if (remote.quick) a.quick = remote.quick;
       if (remote.estVocab) a.estVocab = remote.estVocab;
       a.updatedAt = remote.updatedAt || now();
       setAssess(a, true); changed = true;
     };
+    // Episodes live one-per-file in the same gist (v-<id>.json). The phone reads
+    // them but never records them — recording needs the YouTube sidebar, which a
+    // web page cannot have — so this is a one-way projection, and it keeps only
+    // what a phone can act on: which episodes exist, how much of each is still
+    // unlearned, and the word list. Sentences and transcript stay in the file.
+    const mergeRemoteVideos = (remoteIdx, files) => {
+      if (!remoteIdx) return false;
+      const idx = load(K.videos, {}) || {};
+      let touched = false;
+      Object.keys(remoteIdx).forEach((vid) => {
+        const r = remoteIdx[vid] || {};
+        if (r.del) { if (idx[vid]) { delete idx[vid]; touched = true; } return; }
+        if (idx[vid] && (idx[vid].u || 0) >= (r.u || 0)) return;
+        const f = files && files["v-" + String(vid).replace(/[^A-Za-z0-9_-]/g, "") + ".json"];
+        if (!f) return;
+        let v = null;
+        if (f.content) { try { v = JSON.parse(f.content); } catch (e) {} }
+        // >1MB arrives truncated with a raw_url instead of content — record the
+        // link and let the episode page fetch it when it is actually opened
+        if (!v && f.raw_url) {
+          idx[vid] = { u: r.u || 0, t: r.t || vid, url: r.url || "", raw: f.raw_url, words: [], partial: true };
+          touched = true; return;
+        }
+        if (!v || !v.id) return;
+        idx[vid] = {
+          u: v.updatedAt || v.savedAt || 0, t: v.title || vid, url: v.url || "",
+          s: v.savedAt || 0, raw: f.raw_url || "", lines: (v.lines || []).length,
+          // the words WITHOUT their sentences — that is the bulky half
+          words: (v.words || []).map((w) => ({ w: w.w, k: w.k, r: w.r || null, c: w.c ? 1 : 0 })),
+        };
+        touched = true;
+      });
+      if (touched) save(K.videos, idx);
+      return touched;
+    };
+
+    // The phone doesn't own the episode index — the desktop writes it. But a
+    // push replaces the whole of lexis.json, so it has to hand the index back
+    // untouched, or a phone sync would erase every episode's existence (and
+    // with it the deletions the desktop is still waiting to see).
+    let remoteVideoIdx = null;
     try {
       if (btn) btn.textContent = "Pulling……";
       let id = (s.gistId || "").trim();
@@ -2452,12 +2946,12 @@
         const r = await fetch("https://api.github.com/gists/" + id, { headers: hdr });
         if (r.ok) {
           const g = await r.json(); const f = g.files && g.files[FILE];
-          if (f && f.content) { try { const d = JSON.parse(f.content); mergeRemote(Array.isArray(d) ? d : d.words, Array.isArray(d) ? {} : d.deleted); if (!Array.isArray(d)) mergeRemoteAssess(d.assess); } catch (e) {} }
+          if (f && f.content) { try { const d = JSON.parse(f.content); mergeRemote(Array.isArray(d) ? d : d.words, Array.isArray(d) ? {} : d.deleted); if (!Array.isArray(d)) { mergeRemoteAssess(d.assess); remoteVideoIdx = d.videoIndex || null; if (mergeRemoteVideos(d.videoIndex, g.files)) changed = true; } } catch (e) {} }
         } else if (r.status === 404) { id = ""; }
         else if (r.status === 401) throw new Error("invalid token");
       }
       if (btn) btn.textContent = "Pushing……";
-      const body = JSON.stringify({ description: "Lexis vocab sync", public: false, files: { [FILE]: { content: JSON.stringify({ words: getWords(), assess: assessPayload(), deleted: getTombs(), syncedAt: now() }) } } });
+      const body = JSON.stringify({ description: "Lexis vocab sync", public: false, files: { [FILE]: { content: JSON.stringify({ words: getWords(), assess: assessPayload(), deleted: getTombs(), videoIndex: remoteVideoIdx || undefined, syncedAt: now() }) } } });
       const resp = id
         ? await fetch("https://api.github.com/gists/" + id, { method: "PATCH", headers: hdr, body })
         : await fetch("https://api.github.com/gists", { method: "POST", headers: hdr, body });
@@ -2775,6 +3269,100 @@
       for (let i = 0; i < list.length; i++) { add.textContent = `Adding… ${i + 1}/${list.length}…`; saveWord(await lookupFull(list[i])); }
       toast(`Added ${list.length}  chunks`); refreshBadge(); renderChunkResult();
     });
+  }
+
+  // ---- quick check — Yes/No test with pseudowords (maths in vocab.js) ----
+  function quickState() { return getAssess().quick || null; }
+  function quickEstimate() {
+    return window.lexisQuickEstimate ? window.lexisQuickEstimate(quickState()) : null;
+  }
+  // reading first (it judges words in context), then the quick check — but only
+  // when its own false-alarm rate says the answers were judgements about words
+  function bestEstimate() {
+    const a = getAssess();
+    const r = a.reading ? readingEstimate(a.reading) : null;
+    if (r) return r;
+    const q = quickEstimate();
+    return q && q.reliable ? q : null;
+  }
+
+  function renderQuickTest() {
+    const items = window.lexisQuickRound ? window.lexisQuickRound(quickState()) : [];
+    const yes = new Set();                       // every round starts blank
+    const round = ((quickState() || {}).rounds || 0) + 1;
+    const prev = quickEstimate();
+    view.innerHTML = `
+      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← Back</button>
+        ${round > 1 ? `<button class="btn" id="qkReset" style="margin-left:auto">Start over</button>` : ""}</div>
+      <div class="card">
+        <h2 class="sec">Quick check</h2>
+        <p class="muted" style="font-size:13px;margin:0"><b>Tap only the words you know</b> — know meaning it, not having seen it. Anything you leave alone counts as not known. ${items.length} words, about two minutes.</p>
+        <p class="muted" style="font-size:12px;margin:8px 0 0">Some of these <b>are not English words at all</b>, and they are here on purpose: a test you mark yourself is worth nothing unless it can tell when you are over-claiming, so whatever share of the invented ones you tap gets taken back off your score. Don't hunt for them — just answer honestly.</p>
+        ${round > 1 ? `<p class="muted" style="font-size:12px;margin:8px 0 0">Round ${round} · <b>all new words</b>${prev ? ` — currently ≈<b>${prev.estVocab.toLocaleString()}</b>, and this round concentrates where you started to falter.` : ""}</p>` : ""}
+      </div>
+      <div class="card"><div class="row">${items.map((x) =>
+        `<button class="chunk-chip" data-qk="${esc(x.term)}">${esc(x.term)}</button>`).join("")}</div></div>
+      <div class="row"><button class="btn primary" id="qkDone" style="flex:1;padding:13px">Work it out →</button>
+        <span class="muted" id="qkN" style="font-size:12px">0 marked known</span></div>`;
+    $("#back").addEventListener("click", () => go("me"));
+    view.querySelectorAll("[data-qk]").forEach((b) => b.addEventListener("click", () => {
+      const t = b.dataset.qk;
+      if (yes.has(t)) yes.delete(t); else yes.add(t);
+      b.classList.toggle("kn", yes.has(t));
+      $("#qkN").textContent = yes.size + " marked known";
+    }));
+    if ($("#qkReset")) $("#qkReset").addEventListener("click", () => {
+      const a = getAssess(); a.quick = null; setAssess(a);
+      toast("Quick check reset — the next round starts from the top again");
+      renderQuickTest();
+    });
+    $("#qkDone").addEventListener("click", () => {
+      const a = getAssess();
+      a.quick = Object.assign(window.lexisQuickTally(a.quick, items, yes), { at: now() });
+      const est = window.lexisQuickEstimate(a.quick);
+      // marks made in a round where a third of the nonwords were claimed are
+      // not evidence, so they do not become "known"
+      if (est && est.reliable) {
+        const good = items.filter((x) => !x.fake && yes.has(x.term)).map((x) => x.term.toLowerCase());
+        a.known = Array.from(new Set([].concat(a.known || [], good)));
+      }
+      setAssess(a);
+      renderQuickResult();
+    });
+  }
+
+  function renderQuickResult() {
+    const est = quickEstimate();
+    if (!est) { renderQuickTest(); return; }
+    const rows = est.byLevel.map((b) => `<div class="lvl">
+      <span class="lvl-bl mfreq">${b.lo.toLocaleString()}–${b.hi.toLocaleString()}</span>
+      <span class="lvl-track"><i style="width:${Math.round(b.pct * 100)}%"></i></span>
+      <span class="lvl-n">${Math.round(b.pct * 100)}%${b.measured ? ` · ${b.seen} asked` : " · estimated"}</span></div>`).join("");
+    const a = getAssess();
+    const rEst = a.reading ? readingEstimate(a.reading) : null;
+    // the false-alarm line is the point of the design, so it is stated either way
+    const faLine = est.faSeen
+      ? (est.faYes
+        ? `You marked <b>${est.faYes}</b> of the ${est.faSeen} invented words as known (${Math.round(est.faRate * 100)}%), so ${Math.round(est.faRate * 100)}% of your other answers were discounted as the same reflex.`
+        : `You marked <b>none</b> of the ${est.faSeen} invented words — nothing was discounted, and this is your raw score.`)
+      : "";
+    view.innerHTML = `
+      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← Back</button></div>
+      ${est.reliable ? "" : `<div class="card"><h2 class="sec">⚠️ Not reported as a score</h2>
+        <p class="muted" style="font-size:13px;margin:0">You marked ${est.faYes} of the ${est.faSeen} invented words as known. Above about a third, the answers stop being judgements about words and the correction can no longer separate what you know from what you waved through. Take it again and leave anything you are unsure of untapped.</p></div>`}
+      <div class="card">
+        <h2 class="sec">Estimated vocabulary · quick check</h2>
+        <div class="stat">${est.reliable ? `≈ ${est.estVocab.toLocaleString()}` : "—"}</div>
+        <div class="muted" style="font-size:12px">${est.reliable ? `${est.range[0].toLocaleString()}–${est.range[1].toLocaleString()} word families` : "unusable answers"} · ${est.rounds > 1 ? `${est.rounds} rounds · ` : ""}${est.sampled} real words judged</div>
+        <div style="margin-top:12px">${rows}</div>
+        <div class="muted" style="font-size:12px;margin-top:8px">${faLine}</div>
+      </div>
+      ${rEst ? `<div class="card"><p class="muted" style="font-size:12px;margin:0">Your reading assessment says <b>${rEst.estVocab.toLocaleString()}</b>. The two are measured differently — reading judges words <b>in context</b> and tops out near 15,900, this one judges them in isolation against a 20,000-family list — so they won't match exactly. <b>Where they disagree, trust the reading number</b>: recognising a word alone is easier than using one in a sentence.</p></div>` : ""}
+      <div class="row"><button class="btn" id="qkAgain" style="flex:1">Another round →</button>
+        <button class="btn" id="qkRead" style="flex:1">Reading assessment</button></div>`;
+    $("#back").addEventListener("click", () => go("me"));
+    $("#qkAgain").addEventListener("click", renderQuickTest);
+    $("#qkRead").addEventListener("click", renderReadingPick);
   }
 
   // ---- quick assess (mark words known from a frequency-graded sample) ----

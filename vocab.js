@@ -1532,6 +1532,191 @@ function lexisEstimateFromReading(seen, unknown) {
 
 
 // ===========================================================================
+// QUICK CHECK — Yes/No vocabulary test with pseudowords
+// ===========================================================================
+// Why a second estimator exists at all. The reading assessment is the accurate
+// one — ~100 judgements made in real context per passage — but it costs a whole
+// passage to get a first number, and it cannot be repeated forever (each word
+// type counts once, so re-reading adds nothing). This is the fast path: isolated
+// words, 认识 / 不认识, about two minutes.
+//
+// A self-report test is worth nothing unless it can catch over-claiming, so
+// about one item in five is a PSEUDOWORD — a nonword built to look like real
+// English (contrelate, plaustive, quelmish). Saying you know one is a false
+// alarm, and the whole score is corrected by how often you do it:
+//     corrected = (hit − falseAlarm) / (1 − falseAlarm)
+// (Meara & Buxton 1987, the standard Yes/No correction). Without that term this
+// would just be you scoring yourself — the exact failure mode described in the
+// review-engine comment further down, where "I know this one" is the judgement
+// with no criterion behind it. Every pseudoword below was checked against
+// macOS web2, /usr/share/dict/words, our own frequency table and their lemmas;
+// two candidates turned out to be real words and were dropped.
+//
+// The bank is drawn from data/freqrank.txt (word-family ranks) but every item
+// was then hand-checked, because that table's deep tail still carries surnames
+// and 1913-Webster archaisms whose rank is an artefact of a same-spelled proper
+// noun (kent, chen, culver, domine). A junk item is fatal here: it behaves
+// exactly like a pseudoword, so it would corrupt the correction it is meant to
+// support.
+var LEXIS_QUICK_CORE = 2000;   // ranks 1–2000 held by anyone taking this at all
+var LEXIS_QUICK_LEVELS = [
+  { lo: 2001, hi: 3200, size: 1200 },
+  { lo: 3201, hi: 4600, size: 1400 },
+  { lo: 4601, hi: 6200, size: 1600 },
+  { lo: 6201, hi: 8000, size: 1800 },
+  { lo: 8001, hi: 10000, size: 2000 },
+  { lo: 10001, hi: 12200, size: 2200 },
+  { lo: 12201, hi: 14600, size: 2400 },
+  { lo: 14601, hi: 17200, size: 2600 },
+  { lo: 17201, hi: 20000, size: 2800 },
+];
+// 25 real words per level, ordered by rank inside the level.
+var LEXIS_QUICK_BANK = [
+  ["swim", "yard", "exclude", "calculator", "accident", "luxury", "evil", "temporary", "discovery", "alcohol", "analyze", "cluster", "relax", "empire", "illegal", "merchandise", "decline", "equation", "sensor", "crisis", "veteran", "tourist", "expenditure", "infant", "portrait"],
+  ["thermal", "romantic", "regardless", "noble", "assurance", "vulnerability", "commence", "township", "terminate", "immune", "beginner", "motive", "stain", "commonwealth", "spectacular", "psychological", "passport", "surgeon", "thesis", "cancellation", "scatter", "tribute", "withdrawal", "adolescent", "questionnaire"],
+  ["mighty", "maritime", "gentle", "dismiss", "chorus", "generous", "anatomy", "condense", "consecutive", "invoke", "incidence", "prevail", "halt", "widespread", "volatile", "vegetation", "garment", "mysterious", "contour", "conceptual", "endure", "profound", "prosper", "illusion", "abide"],
+  ["clarification", "proximity", "vanity", "ledge", "cosmic", "restraint", "whisper", "impulse", "observatory", "mythology", "proclaim", "constructive", "devise", "inference", "plunge", "beneficiary", "provoke", "secular", "fragile", "oath", "commend", "altar", "dazzle", "transcend", "envy"],
+  ["wrongful", "cortex", "miserable", "polygon", "lurk", "constituency", "volcanic", "anesthesia", "doctorate", "laud", "chronology", "indulgence", "reclamation", "outpost", "baroque", "warden", "skeletal", "methane", "reckless", "craftsman", "exemplary", "smother", "implicate", "pitfall", "speculative"],
+  ["turbulent", "refute", "tempest", "remittance", "mellow", "deceptive", "conservancy", "cleave", "dictatorship", "splendor", "avert", "inductive", "endemic", "inertia", "unravel", "supersonic", "empress", "resilient", "repellent", "conjure", "gentry", "disparity", "confound", "familiarize", "interlude"],
+  ["savory", "formative", "munition", "quirk", "penalize", "affluent", "votive", "atone", "cheeky", "punishable", "tonal", "warship", "modernism", "snide", "deceit", "pique", "annul", "foreclose", "prudence", "quintessential", "defunct", "haggard", "sleuth", "contrive", "elude"],
+  ["grotesque", "remorse", "extrapolation", "cumin", "intolerable", "triage", "edifice", "impromptu", "shrewd", "pretentious", "propellant", "untimely", "cautionary", "conceit", "inefficiency", "outcrop", "gruel", "cohabit", "impersonal", "stoppage", "aggressor", "aristocracy", "charade", "thoroughfare", "forgo"],
+  ["effusion", "makeshift", "rebuff", "indigestion", "leprechaun", "macaw", "bergamot", "pragmatism", "waistcoat", "delusional", "ganglion", "vaudeville", "tarmac", "chaff", "idiocy", "reformist", "canker", "blurt", "scrawl", "exasperate", "inescapable", "lenient", "apathetic", "neophyte", "mien"],
+];
+// Nonwords. Morphologically plausible English — the point is that they should be
+// tempting, not obviously alien; an item nobody would ever claim measures nothing.
+var LEXIS_PSEUDO = [
+  "contrelate", "plaustive", "morbanic", "tresible", "flantern", "disquate", "obtrusal", "cranstive",
+  "flunctive", "gastrement", "hentious", "impellage", "jursive", "kentrify", "lomative", "mendacle",
+  "nubriate", "obsidate", "pertulate", "quandric", "ructible", "sablent", "tarnitude", "vagulate",
+  "xantive", "yestral", "zephrate", "blantic", "crestible", "frastic", "hastrine", "jantrous",
+  "klovent", "lurbid", "mectify", "norvent", "opulate", "prandive", "quelmish", "rhabitude",
+  "spandrite", "tuvicate", "woltive", "zabrient", "clantify", "dremulous", "fenestrive", "hobrious",
+  "intracine", "jubrant", "plerious", "sindulate", "vermanic", "brastic", "delvature", "gorbient",
+  "tramulent", "wistrable",
+];
+
+// Which level does a corrected ratio put your frontier at? The first level you
+// hold less than half of — below that you are solid, above it you are guessing.
+function lexisQuickFrontier(byLevel) {
+  for (var i = 0; i < LEXIS_QUICK_LEVELS.length; i++) {
+    var r = byLevel[i];
+    if (r && r.measured && r.pct < 0.5) return i;
+  }
+  return LEXIS_QUICK_LEVELS.length - 1;
+}
+
+// Build one round of items. Never repeats an item you have already judged, the
+// same rule the phrase check follows — a "test again" that asks the same words
+// cannot tell you anything you did not already know.
+//   prev — accumulated state from lexisQuickTally (or null for the first round)
+// Round 1 sweeps every level evenly; later rounds spend their items around the
+// frontier, which is the only place another sample changes the answer.
+function lexisQuickRound(prev) {
+  prev = prev || {};
+  var asked = {};
+  (prev.asked || []).forEach(function (t) { asked[t] = 1; });
+  var round = (prev.rounds || 0) + 1;
+  var est = prev.rounds ? lexisQuickEstimate(prev) : null;
+  var focus = est ? est.frontierLevel : -1;
+  var items = [], realN = 0;
+  LEXIS_QUICK_BANK.forEach(function (bank, li) {
+    var want = focus < 0 ? 3 : (Math.abs(li - focus) <= 1 ? 5 : 2);
+    var fresh = bank.filter(function (t) { return !asked[t]; });
+    // the bank for a level runs out after a few rounds — reuse from the front
+    // rather than silently returning a short round
+    if (fresh.length < want) fresh = fresh.concat(bank.filter(function (t) { return asked[t]; }));
+    var step = Math.max(1, Math.floor(fresh.length / want));
+    for (var k = 0; k < want && k * step < fresh.length; k++) {
+      items.push({ term: fresh[k * step], level: li, fake: false });
+      realN++;
+    }
+  });
+  // ~22% pseudowords: enough to measure a false-alarm rate, few enough that the
+  // test doesn't feel like a trick
+  var fakeN = Math.max(5, Math.round(realN * 0.22));
+  var fakeFresh = LEXIS_PSEUDO.filter(function (t) { return !asked[t]; });
+  if (fakeFresh.length < fakeN) fakeFresh = fakeFresh.concat(LEXIS_PSEUDO);
+  for (var f = 0; f < fakeN && f < fakeFresh.length; f++) items.push({ term: fakeFresh[f], level: -1, fake: true });
+  return lexisShuffle(items, round * 7919 + realN);
+}
+
+// Fold one answered round into the running state. Accumulates rather than
+// replacing, so a second round sharpens the number instead of restarting it.
+function lexisQuickTally(prev, items, yesSet) {
+  var st = {
+    rounds: ((prev && prev.rounds) || 0) + 1,
+    asked: ((prev && prev.asked) || []).slice(),
+    byLevel: {},
+    fake: { seen: ((prev && prev.fake && prev.fake.seen) || 0), yes: ((prev && prev.fake && prev.fake.yes) || 0) },
+    at: (prev && prev.at) || 0,
+  };
+  var pl = (prev && prev.byLevel) || {};
+  Object.keys(pl).forEach(function (k) { st.byLevel[k] = { seen: pl[k].seen, yes: pl[k].yes }; });
+  var seenAsked = {};
+  st.asked.forEach(function (t) { seenAsked[t] = 1; });
+  (items || []).forEach(function (it) {
+    if (!it) return;
+    var yes = !!(yesSet && (yesSet.has ? yesSet.has(it.term) : yesSet[it.term]));
+    if (it.fake) { st.fake.seen++; if (yes) st.fake.yes++; }
+    else {
+      var b = st.byLevel[it.level] || (st.byLevel[it.level] = { seen: 0, yes: 0 });
+      b.seen++; if (yes) b.yes++;
+    }
+    if (!seenAsked[it.term]) { seenAsked[it.term] = 1; st.asked.push(it.term); }
+  });
+  return st;
+}
+
+// Turn the tally into a word-family estimate.
+function lexisQuickEstimate(state) {
+  if (!state || !state.rounds) return null;
+  var fk = state.fake || { seen: 0, yes: 0 };
+  var fa = fk.seen ? fk.yes / fk.seen : 0;
+  var byLevel = [], sampled = 0;
+  LEXIS_QUICK_LEVELS.forEach(function (lv, i) {
+    var b = (state.byLevel || {})[i] || { seen: 0, yes: 0 };
+    var hit = b.seen ? b.yes / b.seen : 0;
+    // the correction: credit only the part of your "yes" rate that survives
+    // your own false-alarm rate
+    var pct = fa >= 1 ? 0 : Math.max(0, Math.min(1, (hit - fa) / (1 - fa)));
+    var measured = b.seen >= 3;
+    if (measured) sampled += b.seen;
+    byLevel.push({ level: i, lo: lv.lo, hi: lv.hi, size: lv.size, seen: b.seen, yes: b.yes, raw: hit, pct: pct, measured: measured });
+  });
+  // an unmeasured level borrows from its nearest measured neighbours rather
+  // than counting as fully known — err downward, same as the reading estimate
+  byLevel.forEach(function (b, i) {
+    if (b.measured) return;
+    var before = null, after = null;
+    for (var j = i - 1; j >= 0; j--) if (byLevel[j].measured) { before = byLevel[j]; break; }
+    for (var k = i + 1; k < byLevel.length; k++) if (byLevel[k].measured) { after = byLevel[k]; break; }
+    b.pct = before && after ? (before.pct + after.pct) / 2
+      : before ? before.pct * 0.7
+      : after ? Math.min(1, after.pct + 0.15)
+      : 0;
+  });
+  var est = LEXIS_QUICK_CORE;
+  byLevel.forEach(function (b) { est += b.size * b.pct; });
+  var estVocab = Math.round(est / 100) * 100;
+  var confidence = sampled >= 60 ? "high" : sampled >= 30 ? "mid" : "low";
+  var margin = confidence === "high" ? 0.1 : confidence === "mid" ? 0.18 : 0.3;
+  var fl = lexisQuickFrontier(byLevel);
+  return {
+    estVocab: estVocab,
+    range: [Math.round((estVocab * (1 - margin)) / 100) * 100, Math.round((estVocab * (1 + margin)) / 100) * 100],
+    byLevel: byLevel, sampled: sampled, rounds: state.rounds, confidence: confidence,
+    faSeen: fk.seen, faYes: fk.yes, faRate: fa,
+    // Over a third of the nonwords claimed means the answers are not judgements
+    // about words, so the number is not reported as one.
+    reliable: fa < 0.35,
+    frontierLevel: fl,
+    frontierRank: LEXIS_QUICK_LEVELS[fl].lo,
+    ceiling: LEXIS_QUICK_CORE + LEXIS_QUICK_LEVELS.reduce(function (s, l) { return s + l.size; }, 0),
+  };
+}
+
+
+// ===========================================================================
 // REVIEW ENGINE (shared by the extension and H5 — one behaviour, one place)
 // ===========================================================================
 // Why more than one drill type. Laufer & Goldstein (2004) separate four
@@ -1545,15 +1730,27 @@ function lexisEstimateFromReading(seen, unknown) {
 // and — following the encoding-variability line of work — asks for the word in
 // SEVERAL different sentences rather than drilling one to death, because a
 // word met in varied contexts is retrieved more flexibly later.
+// Two of these come from the classic flashcard apps (欧路词典 and its kin) and are
+// here on purpose, with their limits built in rather than papered over:
+//   en2cn — word → pick the meaning. The pure form of passive recognition, and
+//           the first rung of the ladder. It shows NO sentence: a sentence would
+//           leak the topic and let you match a gloss without knowing the word,
+//           which is exactly why the single-sense 选义 card was removed.
+//   flip  — see the word, decide for yourself, then turn it over. This is the
+//           card with no criterion (see above), so it is opt-in only, it never
+//           counts toward 产出, and it can never earn 已掌握. It earns its place
+//           as a fast way to sweep a backlog, not as a measure of knowing.
 var LEXIS_DRILL_CN = {
   sense: "Which sense here?", word: "Pick the word", cloze: "Fill the gap", zh2en: "Say it in English",
   collo: "Collocation", dict: "Dictation", recall: "Recall",
+  en2cn: "Pick the meaning", flip: "Flip card · self-rated",
 };
 // 全英学习环境 uses these instead — an immersion mode that still labels the card
 // in Chinese isn't one.
 var LEXIS_DRILL_EN = {
   sense: "Which sense here?", word: "Pick the word", cloze: "Fill the gap", zh2en: "Say it in English",
   collo: "Collocation", dict: "Dictation", recall: "Recall",
+  en2cn: "Pick the meaning", flip: "Flip card · self-rated",
 };
 
 function lexisHashText(s) {
@@ -1598,12 +1795,32 @@ function lexisClozeSplit(text, head) {
   return { pre: text.slice(0, m.index), answer: m[0], post: text.slice(m.index + m[0].length) };
 }
 
+// A word saved from a YouTube episode already carries the line it was actually
+// said in (as its context) and the episode it came from (as its url). That line
+// is the strongest drill sentence the entry has: it is the exact moment you
+// didn't understand the word, so retrieving it there re-uses the same voice and
+// the same situation instead of building a second, unrelated memory in a corpus
+// sentence you have never heard. Returns null for anything not from a video.
+function lexisVideoRef(url, title) {
+  var u = String(url || "");
+  if (!/youtube\.com\/watch|youtu\.be\//i.test(u)) return null;
+  var m = /[?&]t=(\d+)/.exec(u);
+  return { url: u, title: String(title || "").trim(), at: m ? +m[1] : null };
+}
+// mm:ss for a video timestamp
+function lexisFmtAt(sec) {
+  if (typeof sec !== "number" || !isFinite(sec) || sec < 0) return "";
+  var s = Math.floor(sec), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
+  var two = function (n) { return (n < 10 ? "0" : "") + n; };
+  return h ? h + ":" + two(m) + ":" + two(ss) : m + ":" + two(ss);
+}
+
 // Every sentence we could drill this word in, best first. Sources are labelled
-// so the UI can say where a sentence came from ("我的例句" / "原句").
+// so the UI can say where a sentence came from ("我的例句" / "原句" / the episode).
 function lexisWordSentences(w) {
   var d = (w && w.data) || {}, head = (w && w.word) || "";
   var out = [], seen = {};
-  var push = function (text, cn, source, bonus) {
+  var push = function (text, cn, source, bonus, video) {
     var t = String(text || "").replace(/\s+/g, " ").trim();
     if (!t) return;
     var k = lexisHashText(t);
@@ -1612,13 +1829,22 @@ function lexisWordSentences(w) {
     if (!q) return;
     if (!lexisClozeSplit(t, head)) return;        // target must actually appear
     seen[k] = 1;
-    out.push({ key: k, text: t, cn: cn || "", source: source, quality: Math.min(1, q + (bonus || 0)) });
+    // the cap is above 1 on purpose: with it AT 1 every bonus was silently
+    // discarded whenever both sentences already scored a clean 1.0, which is
+    // most of the time — so 我的例句 and the line you actually heard never
+    // actually outranked a generic corpus sentence.
+    out.push({ key: k, text: t, cn: cn || "", source: source,
+      quality: Math.min(2, q + (bonus || 0)), video: video || null });
   };
   (d.userExamples || []).forEach(function (e) { push(e.text, e.translation, "mine", 0.25); });
   (d.examples || []).forEach(function (e) { push(e.text, e.translation, "example", e.translation ? 0.08 : 0); });
   (d.collocations || []).forEach(function (c) { push(c.example, c.exampleCn, "collo", -0.05); });
-  push(w && w.context, "", "context", -0.05);
-  ((w && w.sightings) || []).forEach(function (s) { push(s && s.context, "", "context", -0.08); });
+  var vref = lexisVideoRef(w && w.url, w && w.title);
+  push(w && w.context, "", vref ? "video" : "context", vref ? 0.3 : -0.05, vref);
+  ((w && w.sightings) || []).forEach(function (s) {
+    var sv = lexisVideoRef(s && s.url, s && s.title);
+    push(s && s.context, "", sv ? "video" : "context", sv ? 0.22 : -0.08, sv);
+  });
 
   // Which SENSE you actually saved the word for. A sentence that uses a
   // different sense teaches the wrong thing — you looked up "glitch" as a
@@ -1640,7 +1866,8 @@ function lexisWordSentences(w) {
   }
   if (homeSense !== null) {
     out.forEach(function (o) {
-      if (o.source === "mine" || o.source === "context") { o.sense = homeSense; return; }
+      // a video line IS the sentence you captured it from — same standing as 原句
+      if (o.source === "mine" || o.source === "context" || o.source === "video") { o.sense = homeSense; return; }
       var sf = lexisSenseFor(w, o.text);
       o.sense = sf ? sf.index : null;
       o.offSense = !!(sf && sf.confident && sf.index !== homeSense);
@@ -1720,6 +1947,207 @@ function lexisProduceTarget(w) {
   return Math.min(3, Math.max(1, lexisWordSentences(w).length));
 }
 
+// =========================================================================
+//  Knowledge strength — Laufer & Goldstein's four levels as an explicit state
+// =========================================================================
+// The drill ladder used to be keyed on `srs.reps`, and `reps` was reset to 0 by
+// a single lapse. So a word you had known for two months, missed once, came
+// back as a four-option recognition card and every drill type it had already
+// cleared was forgotten. reps answers "how many times has this card come up";
+// it was never able to answer "which kind of retrieval can you do now".
+//
+// Strength is that second question, stored separately in data.rev.str:
+//   0 recognition   (选义 / 看词选义 — pick the meaning)
+//   1 cued choice   (选词填空 — pick the word for this sentence)
+//   2 cued recall   (填空 — write it into a real sentence)
+//   3 free recall   (看中文写出来 / 听写 — no sentence to lean on)
+// It advances one rung when you clear a card AT or ABOVE the current rung, and
+// drops exactly ONE rung on a miss — never to zero. Answering an easier card
+// correctly proves nothing new, so it moves nothing.
+var LEXIS_STR_MAX = 3;
+var LEXIS_DRILL_RUNG = { sense: 0, en2cn: 0, word: 1, cloze: 2, zh2en: 3, dict: 3 };
+function lexisDrillRung(mode) {
+  var r = LEXIS_DRILL_RUNG[mode];
+  return typeof r === "number" ? r : 0;
+}
+// A card with no criterion (flip, recall) can't move strength — you told us you
+// knew it, which is exactly the evidence this whole ladder exists to replace.
+function lexisDrillScores(drill) {
+  if (!drill || drill.selfRate) return false;
+  return LEXIS_DRILL_RUNG.hasOwnProperty(drill.mode);
+}
+function lexisStrengthOf(w) {
+  var r = ((w && w.data) || {}).rev || {};
+  if (typeof r.str === "number") return Math.max(0, Math.min(LEXIS_STR_MAX, r.str));
+  // Words saved before this field existed. The mapping is deliberately the
+  // OLD reps-keyed ladder read backwards (0 → recognition, 1 → cued choice,
+  // 2–3 → cloze, 4+ → unaided), so on the day this ships every existing word
+  // gets exactly the card it would have got anyway. An upgrade that quietly
+  // demotes a notebook is indistinguishable from the bug it was fixing.
+  var reps = (w && w.srs && w.srs.reps) || 0;
+  var prod = lexisProduced(w);
+  if (prod >= 2 || reps >= 4) return LEXIS_STR_MAX;
+  if (reps >= 2 || prod >= 1) return 2;
+  if (reps >= 1) return 1;
+  return 0;
+}
+
+// =========================================================================
+//  Answer checking — with a reason, not just a boolean
+// =========================================================================
+// Bounded Damerau-Levenshtein: we only ever care whether the distance is 1 or
+// 2, so the loop bails as soon as it can't be. Transposition has to count as
+// ONE edit, not two — `gltich` for `glitch` is the single commonest typing slip
+// there is, and plain Levenshtein scores it the same as a different word.
+function lexisEditDistance(a, b, cap) {
+  a = String(a || ""); b = String(b || "");
+  cap = cap || 3;
+  if (Math.abs(a.length - b.length) > cap) return cap + 1;
+  var prev2 = [], prev = [], cur = [], i, j;
+  for (j = 0; j <= b.length; j++) prev[j] = j;
+  for (i = 1; i <= a.length; i++) {
+    cur[0] = i;
+    var best = cur[0];
+    for (j = 1; j <= b.length; j++) {
+      var costc = a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + costc);
+      if (i > 1 && j > 1 && a.charAt(i - 1) === b.charAt(j - 2) && a.charAt(i - 2) === b.charAt(j - 1)) {
+        cur[j] = Math.min(cur[j], prev2[j - 2] + 1);
+      }
+      if (cur[j] < best) best = cur[j];
+    }
+    if (best > cap) return cap + 1;
+    for (j = 0; j <= b.length; j++) { prev2[j] = prev[j]; prev[j] = cur[j]; }
+  }
+  return prev[b.length];
+}
+function lexisNormAns(x) {
+  return String(x || "").toLowerCase().replace(/[^a-z' ]/g, "").replace(/\s+/g, " ").trim();
+}
+// → {ok, kind, typed, want}
+//   kind: "exact" | "inflection" | "typo" | "wrong" | "empty"
+// "Wrong" and "nearly right" are different events and must not be graded the
+// same: retyping `recieve` for `receive` is a spelling slip on a word you
+// clearly retrieved, and burning it back to a 10-minute step teaches nothing.
+// `avoid` — words this entry is known to be confusable with (data.lookalikes).
+// Typing one of those is not a slip of the fingers, it is the exact mistake the
+// card exists to catch, so it never gets the typo discount.
+function lexisCheckAnswer(typed, expected, headword, avoid) {
+  var t = lexisNormAns(typed);
+  var want = lexisNormAns(expected) || lexisNormAns(headword);
+  if (!t) return { ok: false, kind: "empty", typed: "", want: String(expected || headword || "") };
+  var out = { ok: false, kind: "wrong", typed: String(typed || "").trim(), want: String(expected || headword || "").trim() };
+  var targets = [];
+  [expected, headword].forEach(function (x) { var n = lexisNormAns(x); if (n && targets.indexOf(n) < 0) targets.push(n); });
+  var stems = function (x) {
+    var s = [x];
+    (typeof lexisStemCandidates === "function" ? lexisStemCandidates(x) || [] : []).forEach(function (c) { if (s.indexOf(c) < 0) s.push(c); });
+    return s;
+  };
+  // one word, two forms. lexisStemCandidates is conservative by design (it is
+  // also used for frequency banding, where a wrong stem costs something), so it
+  // strips `glitches` to `glitche` and stops. Here a wrong guess costs nothing,
+  // so a plain inflectional-tail rule backs it up.
+  var sameWord = function (a, b) {
+    if (a === b) return true;
+    if (stems(a).indexOf(b) >= 0 || stems(b).indexOf(a) >= 0) return true;
+    var lo = a.length < b.length ? a : b, hi = a.length < b.length ? b : a;
+    if (!lo || hi.indexOf(lo) !== 0) return false;
+    return /^(s|es|d|ed|ing|ies|er|est|'s)$/.test(hi.slice(lo.length));
+  };
+  for (var k = 0; k < targets.length; k++) {
+    if (t === targets[k]) { out.ok = true; out.kind = "exact"; return out; }
+  }
+  // same words, different inflection — knowing the chunk, not the exact form
+  for (var m = 0; m < targets.length; m++) {
+    var a = targets[m].split(" "), b = t.split(" ");
+    if (a.length !== b.length) continue;
+    var same = true;
+    for (var i2 = 0; i2 < a.length; i2++) {
+      if (!sameWord(a[i2], b[i2])) { same = false; break; }
+    }
+    if (same) { out.ok = true; out.kind = "inflection"; return out; }
+  }
+  // a slip of the fingers on a word you did retrieve
+  var blocked = (avoid || []).some(function (x) { return lexisNormAns(x && x.word ? x.word : x) === t; });
+  if (!blocked) for (var n2 = 0; n2 < targets.length; n2++) {
+    var tgt = targets[n2];
+    // measure against the LONGER of the two: `glitches` vs `glitch` is a two-
+    // character gap that the short side alone would refuse to allow for
+    var L = Math.max(t.length, tgt.length);
+    if (L < 4) continue;                                // no room to "nearly" spell a 3-letter word
+    var cap = L >= 8 ? 2 : 1;
+    if (lexisEditDistance(t, tgt, cap) <= cap) { out.ok = true; out.kind = "typo"; return out; }
+  }
+  out.want = want;
+  return out;
+}
+
+// =========================================================================
+//  Grading — derived from what happened, not from what you say happened
+// =========================================================================
+// The app already had an objective result on every typed and multiple-choice
+// card and threw it away: whichever button you pressed drove the scheduler, so
+// a wrong answer followed by "Got it" still pushed the interval out. That turns
+// the whole thing back into self-rating, the one format with no criterion.
+// Thresholds are per card shape — tapping an option is a different act from
+// typing a word into a gap.
+var LEXIS_SLOW_MS = { pick: 9000, type: 16000 };
+function lexisGradeFor(check, ms, drill) {
+  if (!check || check.kind === "wrong" || check.kind === "empty") return "again";
+  var typing = !(drill && (drill.options || []).length);
+  var slow = typing ? LEXIS_SLOW_MS.type : LEXIS_SLOW_MS.pick;
+  if (check.kind === "typo") return "hard";             // retrieved it, spelled it wrong
+  if (typeof ms === "number" && ms > slow) return "hard";
+  return "good";
+  // "easy" is deliberately never automatic: it multiplies the interval by
+  // ease × 1.3, and "answered fast" is not evidence that big a jump is safe.
+  // It stays available by hand under 'finer grades'.
+}
+
+// =========================================================================
+//  Scheduler
+// =========================================================================
+// Shared so the two surfaces cannot drift apart on the one number that decides
+// when you see a word again.
+//
+// A lapse no longer sets reps to 0. Anki's SM-2 kept the ease through a lapse
+// and FSRS keeps most of the stability (its difficulty term reverts toward the
+// mean rather than being permanently damaged); zeroing reps was harsher than
+// either, and because the drill ladder read reps it also silently un-learned
+// every card type the word had cleared. Forgetting once costs a rung and most
+// of the interval, not the whole history.
+var LEXIS_DAY_MS = 86400000;
+function lexisSchedule(srs, grade, nowMs) {
+  var s = srs || {};
+  var interval = s.interval || 0, ease = typeof s.ease === "number" ? s.ease : 2.5;
+  var reps = s.reps || 0, lapses = s.lapses || 0;
+  var t = nowMs || Date.now();
+  var due;
+  if (grade === "again") {
+    lapses += 1;
+    ease = Math.max(1.3, ease - 0.2);
+    // reps is deliberately left alone — it counts reviews, and forgetting once
+    // does not un-review them. (This is the line that used to read `reps = 0`.)
+    interval = interval >= 1 ? Math.max(1, Math.round(interval * 0.3)) : 0;
+    due = t + 10 * 60000;                     // but it comes back in 10 minutes regardless
+  } else {
+    if (grade === "hard") ease = Math.max(1.3, ease - 0.15);
+    else if (grade === "easy") ease = Math.min(3.2, ease + 0.15);
+    if (reps === 0) interval = grade === "easy" ? 4 : 1;
+    else if (interval < 1) interval = grade === "hard" ? 1 : grade === "easy" ? 4 : 2;
+    else if (reps === 1) interval = grade === "hard" ? 3 : grade === "easy" ? 7 : 4;
+    else {
+      var mult = grade === "hard" ? 1.2 : grade === "easy" ? ease * 1.3 : ease;
+      interval = Math.round(interval * mult);
+    }
+    interval = Math.max(1, interval);
+    reps += 1;
+    due = t + interval * LEXIS_DAY_MS;
+  }
+  return { interval: interval, ease: Math.round(ease * 100) / 100, reps: reps, lapses: lapses, last: t, due: due };
+}
+
 function lexisShuffle(arr, seed) {
   var a = arr.slice(), s = seed || 1;
   for (var i = a.length - 1; i > 0; i--) {
@@ -1773,20 +2201,61 @@ function lexisBuildDrill(w, pool, opts) {
   var senseSF = (pick && (d.meanings || []).length > 1) ? lexisSenseFor(w, pick.text) : null;
   var canSense = !!(senseSF && senseSF.confident && senseSF.meaning);
 
+  // word → meaning needs a gloss of its own and three others to sit beside it
+  var canEn2cn = others.length >= 3 && !!(d.cn || ((d.meanings || [])[0] || {}).definition);
+
+  // Which rung you are on — NOT how many times the card has come up. See
+  // lexisStrengthOf: reps was reset by every lapse, so the ladder used to
+  // un-learn itself the first time you forgot a mature word.
+  var str = lexisStrengthOf(w);
+
+  // ---- effort pacing -----------------------------------------------------
+  // Rungs 2 and 3 are both typed cards, and an established notebook sits almost
+  // entirely on those two rungs — so every card in a session asked you to type
+  // an English word, starting with the very first one. That is a session you
+  // stop opening, and a review you don't open has a retention rate of zero.
+  // So one slot in every three is a tap-only card, and because the count starts
+  // at the session's first card, the session also OPENS on one. `opts.slot` is
+  // the position in this session (not `reps`), so a word met twice in one
+  // session doesn't get the identical card twice either.
+  // The light card is deliberately 选义 where the entry can support it — that is
+  // real sense discrimination, not a re-test of something already proven. It
+  // earns no production credit and cannot promote you (see lexisMarkDrill), so
+  // it costs accuracy nothing; it costs a little speed toward 已掌握, which is
+  // the trade being made on purpose.
+  var slot = (typeof opts.slot === "number") ? opts.slot : null;
+  var wantLight = str >= 2 && slot !== null && (slot % 3 === 0);
+
   var mode = opts.force;
   if (!mode) {
     var canZh = !!(pick && pick.cn) || !!d.cn;
     var canDict = !isChunk && !!(d.audioUs || d.audioUk || d.phonetic);
     // nothing to put a blank in — fall back to producing it from the meaning
     // (still a criterion) rather than to a "did I know that?" self-rating
-    if (!sents.length) mode = (d.cn && opts.lang !== "en") ? "zh2en" : "recall";
-    else if (reps === 0) mode = canSense ? "sense" : "cloze";
-    else if (reps === 1) mode = others.length >= 3 ? "word" : "cloze";
-    else if (reps <= 3) mode = "cloze";
+    if (!sents.length) mode = (d.cn && opts.lang !== "en") ? "zh2en" : (canEn2cn ? "en2cn" : "recall");
+    // A word met once is still building its form-meaning link, so the first
+    // rung is recognition: 选义 when there are real senses to tell apart,
+    // otherwise the plain word → meaning card. Jumping a new word straight to
+    // a blank is the step that made review feel punishing.
+    else if (str <= 0) mode = canSense ? "sense" : (canEn2cn ? "en2cn" : "cloze");
+    else if (str === 1) mode = others.length >= 3 ? "word" : "cloze";
+    // the breather slot — only taken when there is a real tap card to give;
+    // otherwise fall through and type, rather than shipping an empty gesture
+    else if (wantLight && canSense) mode = "sense";
+    else if (wantLight && others.length >= 3) mode = "word";
+    else if (str === 2) mode = "cloze";
     else {
+      // Top rung: rotate the three shapes so consecutive reviews of the same
+      // word are not the same task — a sentence with a gap, the meaning alone,
+      // the sound alone.
       var ladder = ["cloze", canZh ? "zh2en" : "cloze", "cloze", canDict ? "dict" : (canZh ? "zh2en" : "cloze")];
       mode = ladder[reps % ladder.length];
-      // not yet produced in enough distinct sentences → keep drilling those
+      // Writing it into enough DIFFERENT sentences is the gate on 已掌握, so
+      // while that is unmet, prefer the card that can actually close it. This
+      // override is deliberately narrow: dropping the `mode === "dict"` check
+      // collapsed the whole rotation to cloze, because `produced` is empty for
+      // almost every word saved before v1.57.0 — measured 8 of 8 consecutive
+      // reviews coming back as the same fill-in-the-gap card.
       if (lexisProduced(w) < lexisProduceTarget(w) && fresh.length && mode === "dict") mode = "cloze";
     }
   }
@@ -1797,7 +2266,8 @@ function lexisBuildDrill(w, pool, opts) {
 
   var labels = (opts.lang === "en") ? LEXIS_DRILL_EN : LEXIS_DRILL_CN;
   var base = { mode: mode, cn: d.cn || "", sentence: pick, originSense: originSense,
-    produced: lexisProduced(w), target: lexisProduceTarget(w), label: labels[mode] };
+    produced: lexisProduced(w), target: lexisProduceTarget(w), label: labels[mode],
+    strength: str, rung: lexisDrillRung(mode), light: !!(wantLight && lexisDrillRung(mode) < str) };
 
   if (mode === "sense") {
     // A sentence is only shown when we can actually tell WHICH sense it uses —
@@ -1867,6 +2337,52 @@ function lexisBuildDrill(w, pool, opts) {
       sentenceCn: pick.cn, options: lexisShuffle([sp.answer].concat(uniq), seed + 5) });
   }
 
+  // Word → meaning, four options. Deliberately shows no sentence: with one on
+  // screen you can pick the gloss that matches its topic without knowing the
+  // word at all, which is the flaw that killed the single-sense 选义 card.
+  // Every option is in ONE language, same rule as 选义 — switch the whole card
+  // rather than mixing a 中文 gloss against an English definition.
+  if (mode === "en2cn") {
+    var langsB = (opts.lang === "en") ? ["en", "cn"] : ["cn", "en"];
+    var madeB = null;
+    for (var bi = 0; bi < langsB.length && !madeB; bi++) {
+      var lb = langsB[bi];
+      var glossB = function (dd) {
+        if (!dd) return "";
+        if (lb === "en") return String((((dd.meanings || [])[0]) || {}).definition || "").trim();
+        return String(dd.cn || (((dd.meanings || [])[0]) || {}).cn || "").split(/[;；]/)[0].trim();
+      };
+      var mineB = glossB(d);
+      if (!mineB) continue;
+      var wrongB = [];
+      lexisShuffle(others, seed + 11).forEach(function (x) {
+        if (wrongB.length >= 3) return;
+        var g = glossB(x.data || {});
+        if (!g || g === mineB || wrongB.indexOf(g) >= 0) return;
+        // a distractor that is obviously the wrong shape gives the answer away
+        if (Math.abs(g.length - mineB.length) > (lb === "en" ? 40 : 14)) return;
+        wrongB.push(g);
+      });
+      if (wrongB.length >= 3) madeB = { correct: mineB, wrong: wrongB, lang: lb };
+    }
+    if (!madeB) return pick
+      ? Object.assign(base, { mode: "cloze", label: labels.cloze }, cloze(pick))
+      : Object.assign(base, { mode: "recall", label: labels.recall, sentence: null });
+    return Object.assign(base, {
+      options: lexisShuffle([madeB.correct].concat(madeB.wrong), seed + 13),
+      answer: madeB.correct, optionLang: madeB.lang, sentence: null, sentenceCn: "",
+    });
+  }
+
+  // The flip card. No input, no options, no judging — you rate yourself. It is
+  // therefore marked selfRate so the UI can show 认识/模糊/不认识 and, crucially,
+  // it carries no sentence key: lexisMarkDrill must not be able to record a
+  // sentence as "produced" from a card that asked you to produce nothing.
+  if (mode === "flip") {
+    return Object.assign(base, { selfRate: true, sentence: null, sentenceCn: "",
+      full: pick ? pick.text : "", fullCn: pick ? pick.cn : "" });
+  }
+
   if (mode === "zh2en") {
     return Object.assign(base, { zh: (pick && pick.cn) || d.cn, answer: head,
       initial: head.slice(0, 1), full: pick ? pick.text : "" });
@@ -1883,24 +2399,41 @@ function lexisBuildDrill(w, pool, opts) {
     if (!s) return {};
     var sp2 = lexisClozeSplit(s.text, head);
     if (!sp2) return {};
-    return { pre: sp2.pre, answer: sp2.answer, post: sp2.post, sentenceCn: s.cn, sentenceKey: s.key, source: s.source };
+    return { pre: sp2.pre, answer: sp2.answer, post: sp2.post, sentenceCn: s.cn,
+      sentenceKey: s.key, source: s.source, video: s.video || null };
   }
 }
 
-// record that a sentence was seen / produced correctly (mutates w.data.rev)
-function lexisMarkDrill(w, drill, correct) {
+// Record that a sentence was seen / produced correctly (mutates w.data.rev).
+// `kind` is lexisCheckAnswer's verdict when there was one. A misspelling counts
+// as having RETRIEVED the word — that is why it grades "hard" and not "again" —
+// but not as having WRITTEN it: spelling is part of knowing the form, and
+// 已掌握 is a claim about producing the word, so a typo earns neither the
+// production credit nor a promotion. It doesn't cost a rung either.
+function lexisMarkDrill(w, drill, correct, kind) {
   var d = w.data || (w.data = {});
   var r = d.rev || (d.rev = { seen: [], produced: [] });
   r.seen = r.seen || []; r.produced = r.produced || [];
+  var clean = correct && kind !== "typo";
   var k = drill && (drill.sentenceKey || (drill.sentence && drill.sentence.key));
   if (k) {
     if (r.seen.indexOf(k) < 0) r.seen.push(k);
     if (r.seen.length > 24) r.seen = r.seen.slice(-24);
     var productive = drill.mode === "cloze" || drill.mode === "zh2en" || drill.mode === "dict";
-    if (correct && productive && r.produced.indexOf(k) < 0) r.produced.push(k);
-  } else if (correct && drill && drill.mode === "zh2en") {
+    if (clean && productive && r.produced.indexOf(k) < 0) r.produced.push(k);
+  } else if (clean && drill && drill.mode === "zh2en") {
     var kk = lexisHashText(drill.zh || "");
     if (r.produced.indexOf(kk) < 0) r.produced.push(kk);
+  }
+  // Move the rung. Clearing a card at or above where you already were is the
+  // only thing that advances you — answering an easier format correctly proves
+  // nothing you hadn't proved. A miss costs one rung, never the whole ladder.
+  // Cards with no criterion (flip, recall) move the schedule and nothing else.
+  if (lexisDrillScores(drill)) {
+    var cur = lexisStrengthOf(w);
+    if (!correct) r.str = Math.max(0, cur - 1);
+    else if (kind === "typo") r.str = cur;              // retrieved, not yet spelled — hold
+    else r.str = (lexisDrillRung(drill.mode) >= cur) ? Math.min(LEXIS_STR_MAX, cur + 1) : cur;
   }
   return r;
 }
@@ -2332,7 +2865,7 @@ function lexisMergeData(a, b) {
     var no = Array.isArray(other[f]) ? other[f].length : 0;
     if (no > nb) out[f] = other[f];
   });
-  ["cn", "phonetic", "audioUs", "audioUk", "audio", "contextMeaning", "image", "freq"].forEach(function (f) {
+  ["cn", "phonetic", "audioUs", "audioUk", "audio", "contextMeaning", "freq"].forEach(function (f) {
     if (!better[f] && other[f]) out[f] = other[f];
   });
   // the breakdown of a term no dictionary lists — union it, so a part glossed on
@@ -2359,8 +2892,14 @@ function lexisMergeData(a, b) {
     (x || []).concat(y || []).forEach(function (v) { if (v && !seen2[v]) { seen2[v] = 1; o.push(v); } });
     return o;
   };
-  if (ra.seen || rb.seen || ra.produced || rb.produced) {
+  if (ra.seen || rb.seen || ra.produced || rb.produced || typeof ra.str === "number" || typeof rb.str === "number") {
     out.rev = { seen: uniq(ra.seen, rb.seen).slice(-24), produced: uniq(ra.produced, rb.produced) };
+    // The rung you're on. Highest wins: the alternative is that a demotion on
+    // one device silently un-does progress made on the other, and the cost of
+    // being one rung too high is a single card you find easy.
+    if (typeof ra.str === "number" || typeof rb.str === "number") {
+      out.rev.str = Math.max(ra.str || 0, rb.str || 0);
+    }
   }
   out.notFound = !!(better.notFound && other.notFound);   // found anywhere = found
   return out;
@@ -2472,4 +3011,449 @@ function lexisMergeNotebooks(local, remote, tombs) {
   return { words: d.words, changed: changed, dupes: d.dupes };
 }
 
-if (typeof window !== "undefined") { window.LEXIS_SEED = LEXIS_SEED; window.LEXIS_SEED_FLAT = LEXIS_SEED_FLAT; window.LEXIS_FREQ = LEXIS_FREQ; window.LEXIS_COMMON = LEXIS_COMMON; window.LEXIS_MORPH = LEXIS_MORPH; window.lexisAnalyzeMorph = lexisAnalyzeMorph; window.lexisWordDomain = lexisWordDomain; window.LEXIS_SCENE_CN = LEXIS_SCENE_CN; window.lexisIdiomScene = lexisIdiomScene; window.LEXIS_PHRASE_SEED = LEXIS_PHRASE_SEED; window.LEXIS_PHRASE_SEED_FLAT = LEXIS_PHRASE_SEED_FLAT; window.lexisPhraseScene = lexisPhraseScene; window.lexisSingularize = lexisSingularize; window.LEXIS_PASSAGES = LEXIS_PASSAGES; window.LEXIS_BAND_SIZE = LEXIS_BAND_SIZE; window.LEXIS_BAND_SEQ = LEXIS_BAND_SEQ; window.LEXIS_BAND_LABEL = LEXIS_BAND_LABEL; window.lexisWordBand = lexisWordBand; window.lexisPassageTokens = lexisPassageTokens; window.lexisEstimateFromReading = lexisEstimateFromReading; window.LEXIS_PROPER_NOUNS = LEXIS_PROPER_NOUNS; window.LEXIS_JUNK_WORDS = LEXIS_JUNK_WORDS; window.lexisIsNoiseWord = lexisIsNoiseWord; window.LEXIS_ABBREV = LEXIS_ABBREV; window.lexisStemCandidates = lexisStemCandidates; window.LEXIS_PHRASE_LIST = LEXIS_PHRASE_LIST; window.LEXIS_PHRASE_EXAMPLE = LEXIS_PHRASE_EXAMPLE; window.LEXIS_PTYPE_CN = LEXIS_PTYPE_CN; window.LEXIS_KIND_CN = LEXIS_KIND_CN; window.LEXIS_PTYPE_RULE = LEXIS_PTYPE_RULE; window.lexisKindOf = lexisKindOf; window.lexisDataScore = lexisDataScore; window.lexisMergeData = lexisMergeData; window.lexisMergeWordPair = lexisMergeWordPair; window.lexisMergeNotebooks = lexisMergeNotebooks; window.lexisDedupeWords = lexisDedupeWords; window.lexisTombKeys = lexisTombKeys; window.lexisTombAt = lexisTombAt; window.lexisPhraseType = lexisPhraseType; window.LEXIS_PHAVE_LIST = LEXIS_PHAVE_LIST; window.LEXIS_PHAVE_MAP = LEXIS_PHAVE_MAP; window.LEXIS_DRILL_CN = LEXIS_DRILL_CN; window.LEXIS_DRILL_EN = LEXIS_DRILL_EN; window.lexisHashText = lexisHashText; window.lexisSentenceQuality = lexisSentenceQuality; window.lexisClozeSplit = lexisClozeSplit; window.lexisWordSentences = lexisWordSentences; window.lexisSenseFor = lexisSenseFor; window.lexisProduced = lexisProduced; window.lexisProduceTarget = lexisProduceTarget; window.lexisBuildDrill = lexisBuildDrill; window.lexisMarkDrill = lexisMarkDrill; window.LEXIS_FREQ_SUPP = LEXIS_FREQ_SUPP; window.LEXIS_PV_ALL = LEXIS_PV_ALL; window.LEXIS_EXPR_ALL = LEXIS_EXPR_ALL; window.LEXIS_IDIOM_SET = LEXIS_IDIOM_SET; window.LEXIS_TAB_WHAT = LEXIS_TAB_WHAT; window.lexisChunksWith = lexisChunksWith; window.lexisCleanChunk = lexisCleanChunk; window.LEXIS_COMPOUND_TAIL = LEXIS_COMPOUND_TAIL; window.lexisCompoundGloss = lexisCompoundGloss; window.lexisBreakdownParts = lexisBreakdownParts; window.lexisChunksInside = lexisChunksInside; window.lexisTermBreakdown = lexisTermBreakdown; window.lexisBreakdownUseful = lexisBreakdownUseful; window.lexisChunkSample = lexisChunkSample; window.lexisChunkTally = lexisChunkTally; }
+// ---------------------------------------------------------------------------
+// Frequency RANK — shared by every surface (look-up panel, notebook row,
+// notebook detail, H5, and the macOS hotkey's panel, which is the app page).
+// The band chip says WHICH shelf a word sits on; the rank says where on the
+// shelf, and that is the number you actually compare two words with. Sources,
+// in order of trust:
+//   1. freq.rankEst — derived from the dictionary's own occurrences-per-million
+//      through Zipf's law (rank × frequency ≈ constant). Approximate by
+//      construction, so it is ALWAYS rendered with a "~".
+//   2. Martinez & Schmitt's Phrasal Expressions List / the PHaVE List, for a
+//      multiword expression — Datamuse can only price single words, so a phrase
+//      has nothing else, and these lists publish a real corpus rank.
+//   3. the position inside our own frequency-ordered study pool, for a single
+//      word the dictionary couldn't price at all.
+function lexisFmtRank(n) {
+  if (n == null || !isFinite(n)) return "";
+  if (n > 150000) return "150k+";
+  return Math.round(n).toLocaleString("en-US");
+}
+var _lexisPoolIdx = null, _lexisPhraseRankIdx = null, _lexisPhraseRows = null, _lexisPhraseMemo = null;
+var _lexisCuratedRows = null, _lexisCuratedMemo = {};
+function lexisPoolPos(term) {
+  if (!_lexisPoolIdx) {
+    _lexisPoolIdx = {};
+    (typeof LEXIS_FREQ !== "undefined" ? LEXIS_FREQ : []).forEach(function (r, i) {
+      var k = String((r && r.term) || r || "").toLowerCase();
+      if (k && _lexisPoolIdx[k] == null) _lexisPoolIdx[k] = i + 1;
+    });
+  }
+  var v = _lexisPoolIdx[String(term || "").toLowerCase()];
+  return v == null ? null : v;
+}
+function lexisPhraseToks(term) {
+  return String(term || "").toLowerCase().replace(/[’]/g, "'").split(/[^a-z']+/).filter(Boolean);
+}
+// Are these two tokens the same word in different clothes? BOTH sides expand
+// and the form they meet on has to be at least 3 letters: the stemmer is
+// deliberately aggressive for the frequency table ("called" → "cal"), where a
+// wrong candidate costs nothing because it simply misses the word list. Here a
+// wrong candidate would silently rank one phrase as another, so the length
+// floor is what keeps "cal"-grade junk from ever being the meeting point.
+function lexisTokSame(a, b) {
+  if (a === b) return true;
+  if (typeof lexisLemmaCandidates !== "function") return false;
+  var ca = lexisLemmaCandidates(a) || [a], cb = lexisLemmaCandidates(b) || [b];
+  // one IS the other's citation form — always safe, and the only rule short
+  // irregulars can pass ("went" → "go" is 2 letters)
+  if (ca.indexOf(b) !== -1 || cb.indexOf(a) !== -1) return true;
+  for (var i = 0; i < ca.length; i++) {
+    if (!ca[i] || ca[i].length < 4) continue;       // both sides inflected
+    for (var j = 0; j < cb.length; j++) if (ca[i] === cb[j]) return true;
+  }
+  return false;
+}
+function _lexisPhraseBuild() {
+  if (_lexisPhraseRankIdx) return;
+  _lexisPhraseRankIdx = {}; _lexisPhraseRows = []; _lexisPhraseMemo = {};
+  var add = function (r, src) {
+    var k = String(r.term || "").toLowerCase();
+    if (!k || _lexisPhraseRankIdx[k] != null) return;
+    var hit = { rank: r.rank, src: src, via: k };
+    _lexisPhraseRankIdx[k] = hit;
+    _lexisPhraseRows.push({ toks: lexisPhraseToks(k), rank: r.rank, src: src, term: k });
+  };
+  (typeof LEXIS_PHRASE_LIST !== "undefined" ? LEXIS_PHRASE_LIST : []).forEach(function (r) { add(r, "expr"); });
+  (typeof LEXIS_PHAVE_LIST !== "undefined" ? LEXIS_PHAVE_LIST : []).forEach(function (r) { add(r, "pv"); });
+  // Third tier, no rank: the chunks Discover teaches. 81 of the 677 curated
+  // chunks ("break the ice", "the big picture", "tip the scales") are on
+  // neither published list, and calling those "unranked" alongside a word we
+  // simply have no data for says the wrong thing — we know this one well
+  // enough to teach it, we just have no corpus position for it.
+  _lexisCuratedRows = [];
+  var cur = {};
+  var addCur = function (t) {
+    var k = String(t || "").toLowerCase().trim();
+    if (!k || !/\s/.test(k) || _lexisPhraseRankIdx[k] || cur[k]) return;
+    cur[k] = 1;
+    _lexisCuratedRows.push({ toks: lexisPhraseToks(k), term: k });
+  };
+  (typeof LEXIS_PV_ALL !== "undefined" ? LEXIS_PV_ALL : []).forEach(addCur);
+  (typeof LEXIS_EXPR_ALL !== "undefined" ? LEXIS_EXPR_ALL : []).forEach(addCur);
+}
+// the curated form this term is, or "" — same inflection-tolerant matching
+function lexisChunkKnown(term) {
+  _lexisPhraseBuild();
+  var key = String(term || "").toLowerCase().trim();
+  if (!key) return "";
+  if (_lexisCuratedMemo[key] !== undefined) return _lexisCuratedMemo[key];
+  var q = lexisPhraseToks(key), hit = "";
+  if (q.length >= 2) {
+    for (var i = 0; i < _lexisCuratedRows.length && !hit; i++) {
+      var r = _lexisCuratedRows[i];
+      if (r.toks.length !== q.length) continue;
+      var ok = true;
+      for (var j = 0; j < q.length && ok; j++) ok = lexisTokSame(q[j], r.toks[j]);
+      if (ok) hit = r.term;
+    }
+  }
+  _lexisCuratedMemo[key] = hit;
+  return hit;
+}
+// You save the surface form you met ("called out", "gave up"), the lists carry
+// the citation form ("call out", "give up") — matching only verbatim reported
+// those as unranked, which reads as "nobody counted this phrase" when in fact
+// it is the 92nd commonest phrasal verb in English.
+function lexisPhraseRank(term) {
+  _lexisPhraseBuild();
+  var key = String(term || "").toLowerCase().trim();
+  if (!key) return null;
+  if (_lexisPhraseRankIdx[key]) return _lexisPhraseRankIdx[key];
+  if (_lexisPhraseMemo[key] !== undefined) return _lexisPhraseMemo[key];
+  var q = lexisPhraseToks(key), hit = null;
+  if (q.length >= 2) {
+    for (var i = 0; i < _lexisPhraseRows.length && !hit; i++) {
+      var r = _lexisPhraseRows[i];
+      if (r.toks.length !== q.length) continue;
+      var ok = true;
+      for (var j = 0; j < q.length && ok; j++) ok = lexisTokSame(q[j], r.toks[j]);
+      if (ok) hit = { rank: r.rank, src: r.src, via: r.term };
+    }
+  }
+  _lexisPhraseMemo[key] = hit;
+  return hit;
+}
+// A phrase's rank and a word's rank are two different rulers, and the app used
+// to hand the phrase number to the word-family band scale — so every phrase on
+// either list came out "top 10k" (PHaVE tops out at 150) and every phrase off
+// them came out "unranked". Two values, no information. A phrase gets its own
+// chip instead, naming the list it is ranked in.
+function lexisPhraseInfo(term) {
+  var pr = lexisPhraseRank(term);
+  var key = String(term || "").toLowerCase().trim();
+  if (!pr) {
+    var cu = lexisChunkKnown(key);
+    return cu ? { rank: null, src: "cur", via: cu !== key ? cu : "", text: "taught chunk",
+                  title: "Not in either published frequency list, so it has no corpus rank — but it is one of the chunks Lexis teaches in Discover." +
+                         (cu !== key ? ' Listed as "' + cu + '".' : "") } : null;
+  }
+  var via = pr.via && pr.via !== key ? pr.via : "";
+  var asNote = via ? ' Ranked as "' + via + '".' : "";
+  var scale = " This is a position among PHRASES — it is not comparable to a single word's family rank.";
+  return pr.src === "pv"
+    ? { rank: pr.rank, src: "pv", via: via, text: "phrasal verb #" + pr.rank,
+        title: "Position in the PHaVE List (Garnier & Schmitt 2015) — the 149 commonest phrasal verbs in English, commonest first." + scale + asNote }
+    : { rank: pr.rank, src: "expr", via: via, text: "phrase #" + lexisFmtRank(pr.rank),
+        title: "Corpus rank in the Phrasal Expressions List (Martinez & Schmitt 2012) — the commonest non-transparent multiword expressions in English." + scale + asNote };
+}
+// ---------------------------------------------------------------------------
+// Finding the chunks INSIDE a line of text.
+//
+// The word-level marking answers "is this word worth stopping on?" — but a
+// learner at this level trips over "call out" and "get away with", not over
+// their parts, and every one of those parts is common enough to be marked
+// silent. So the same pools Discover teaches from are matched against the
+// running text, inflection and all.
+//
+// Longest match wins and matches never overlap: "get away with" is one thing
+// to learn, not "get away" plus a stray "with".
+// ---------------------------------------------------------------------------
+var _lexisCandMemo = {};
+function lexisCandSet(tok) {
+  var v = _lexisCandMemo[tok];
+  if (v) return v;
+  v = (typeof lexisLemmaCandidates === "function") ? (lexisLemmaCandidates(tok) || [tok]) : [tok];
+  _lexisCandMemo[tok] = v;
+  return v;
+}
+// "make up one's mind" is a citation form: the slot takes any possessive
+var LEXIS_POSS = { "one's": 1, "ones": 1, "oneself": 1, my: 1, your: 1, his: 1, her: 1, its: 1, our: 1, their: 1, "someone's": 1, "somebody's": 1 };
+var _lexisChunkPats = null, _lexisChunkHead = null;
+function _lexisChunkPatBuild() {
+  if (_lexisChunkPats) return;
+  _lexisChunkPats = []; _lexisChunkHead = {};
+  var seen = {};
+  var add = function (raw, src, rank) {
+    var t = (typeof lexisCleanChunk === "function") ? lexisCleanChunk(raw) : String(raw || "");
+    t = String(t || "").toLowerCase().trim();
+    if (!t || t.indexOf("/") !== -1) return;          // "there is / are" — two patterns, not one
+    var toks = lexisPhraseToks(t);
+    if (toks.length < 2 || toks.length > 6 || seen[t]) return;
+    seen[t] = 1;
+    var idx = _lexisChunkPats.length;
+    _lexisChunkPats.push({ toks: toks, term: t, src: src, rank: rank || null });
+    var cs = lexisCandSet(toks[0]);
+    for (var i = 0; i < cs.length; i++) {
+      if (!_lexisChunkHead[cs[i]]) _lexisChunkHead[cs[i]] = [];
+      _lexisChunkHead[cs[i]].push(idx);
+    }
+  };
+  (typeof LEXIS_PHAVE_LIST !== "undefined" ? LEXIS_PHAVE_LIST : []).forEach(function (r) { add(r.term, "pv", r.rank); });
+  (typeof LEXIS_PHRASE_LIST !== "undefined" ? LEXIS_PHRASE_LIST : []).forEach(function (r) { add(r.term, "expr", r.rank); });
+  (typeof LEXIS_PV_ALL !== "undefined" ? LEXIS_PV_ALL : []).forEach(function (t) { add(t, "pv", null); });
+  (typeof LEXIS_EXPR_ALL !== "undefined" ? LEXIS_EXPR_ALL : []).forEach(function (t) { add(t, "expr", null); });
+}
+function _lexisPatTokSame(q, p) {
+  if (q === p) return true;
+  if (LEXIS_POSS[p]) return !!LEXIS_POSS[q] || /'s$/.test(q);
+  var cq = lexisCandSet(q), cp = lexisCandSet(p);
+  if (cq.indexOf(p) !== -1 || cp.indexOf(q) !== -1) return true;
+  for (var i = 0; i < cq.length; i++) {
+    if (!cq[i] || cq[i].length < 4) continue;
+    for (var j = 0; j < cp.length; j++) if (cq[i] === cp[j]) return true;
+  }
+  return false;
+}
+// toks: the line's word tokens, lowercased, in order.
+// → [{ i, len, term, src, rank }] — non-overlapping, longest first.
+function lexisFindChunks(toks) {
+  _lexisChunkPatBuild();
+  var out = [], i = 0;
+  while (i < toks.length) {
+    var bucket = _lexisChunkHead[toks[i]] || null;
+    var cs = lexisCandSet(toks[i]), merged = bucket ? bucket.slice() : [];
+    for (var c = 0; c < cs.length; c++) {
+      var b2 = _lexisChunkHead[cs[c]];
+      if (b2 && b2 !== bucket) for (var k = 0; k < b2.length; k++) if (merged.indexOf(b2[k]) === -1) merged.push(b2[k]);
+    }
+    var best = null;
+    for (var m = 0; m < merged.length; m++) {
+      var p = _lexisChunkPats[merged[m]];
+      if (i + p.toks.length > toks.length) continue;
+      if (best && p.toks.length < best.toks.length) continue;
+      var ok = true;
+      for (var j = 0; j < p.toks.length && ok; j++) ok = _lexisPatTokSame(toks[i + j], p.toks[j]);
+      if (!ok) continue;
+      // longer wins; at equal length a ranked pattern beats an unranked one
+      if (!best || p.toks.length > best.toks.length || (p.rank && !best.rank)) best = p;
+    }
+    if (best) { out.push({ i: i, len: best.toks.length, term: best.term, src: best.src, rank: best.rank }); i += best.toks.length; }
+    else i++;
+  }
+  return out;
+}
+
+// → { text, title } ready to render next to the band chip, or null when we
+// genuinely don't know. Never invents a number.
+function lexisRankInfo(term, freq) {
+  var t = String(term || "").trim().toLowerCase();
+  if (!t) return null;
+  var multi = /\s/.test(t);
+  // The word-family rank wins over every estimate: it is exact (a position in a
+  // real ranked list, not a number derived from Zipf's law) and it is folded
+  // onto the family, so "intertwine" and "intertwined" report the same rank
+  // instead of two ranks 12× apart. See data/freqrank.txt.
+  if (!multi && freq && freq.famRank) {
+    return {
+      // English label, same words as the chips on every surface — this used to
+      // read "#2,728 · 1万以内" in H5's Discover while the row right under it
+      // said "top 10k", i.e. one word wearing two vocabularies again
+      text: "#" + lexisFmtRank(freq.famRank) + " · " +
+            (LEXIS_RANK_BAND_EN[freq.famBand || lexisRankBandOf(freq.famRank)] || ""),
+      band: freq.famBand || lexisRankBandOf(freq.famRank),
+      title: "Rank of this word's FAMILY (all its inflected forms counted together) in a " +
+             "frequency-ordered list of real English words. Commonest first.",
+    };
+  }
+  if (!multi && freq && freq.rankEst) {
+    return {
+      text: "rank ~" + lexisFmtRank(freq.rankEst),
+      title: "Estimated position in an English frequency list — " + freq.perMillion +
+             " occurrences per million (Zipf " + freq.zipf + "), via Zipf's law. Approximate.",
+    };
+  }
+  if (multi) {
+    // deliberately carries no `band`: the four bands are a word-family scale
+    var pi = lexisPhraseInfo(t);
+    return pi ? { text: pi.text, title: pi.title, phrase: true, via: pi.via } : null;
+  }
+  var pos = lexisPoolPos(t), via = "";
+  // an inflected form ("defied") isn't in the pool but its base is, and the two
+  // share a frequency shelf — say which form the number is for
+  if (!pos && typeof lexisStemCandidates === "function") {
+    var cands = lexisStemCandidates(t) || [];
+    for (var i = 0; i < cands.length && !pos; i++) { pos = lexisPoolPos(cands[i]); if (pos) via = cands[i]; }
+  }
+  if (pos) {
+    var total = (typeof LEXIS_FREQ !== "undefined" ? LEXIS_FREQ.length : 0);
+    return {
+      text: "study pool #" + lexisFmtRank(pos) + " / " + lexisFmtRank(total) + (via ? " (as " + via + ")" : ""),
+      title: "The dictionary had no frequency for this one — this is its position in Lexis's own frequency-ordered word pool, commonest first.",
+    };
+  }
+  return null;
+}
+// one short string for a list row, "" when unknown
+function lexisRankText(term, freq) {
+  var r = lexisRankInfo(term, freq);
+  return r ? r.text : "";
+}
+
+// ---------------------------------------------------------------------------
+// "Is this word worth stopping on?" — shared by the page highlighter (⌥H) and
+// the YouTube subtitle marker, so the two can never disagree about the same
+// word on the same screen. `ctx` is what the learner already has:
+//   nb        Set of lowercased notebook headwords
+//   known     Set of lowercased calibrated-known words
+//   seedWords Set of curated words at or past their frontier — an automatic yes
+// ---------------------------------------------------------------------------
+function lexisStemCommon(lw) {
+  var COMMON = (typeof LEXIS_COMMON !== "undefined") ? LEXIS_COMMON : new Set();
+  if (COMMON.has(lw)) return true;
+  var s = [];
+  if (lw.slice(-4) === "ings") s.push(lw.slice(0, -4), lw.slice(0, -4) + "e");
+  if (lw.slice(-3) === "ing") s.push(lw.slice(0, -3), lw.slice(0, -3) + "e");
+  if (lw.slice(-3) === "ers") s.push(lw.slice(0, -3), lw.slice(0, -2));
+  if (lw.slice(-2) === "er") s.push(lw.slice(0, -2), lw.slice(0, -1));
+  if (lw.slice(-3) === "ied") s.push(lw.slice(0, -3) + "y");
+  if (lw.slice(-2) === "ed") s.push(lw.slice(0, -2), lw.slice(0, -1), lw.slice(0, -2) + "e");
+  if (lw.slice(-3) === "ies") s.push(lw.slice(0, -3) + "y");
+  if (lw.slice(-2) === "es") s.push(lw.slice(0, -2), lw.slice(0, -1));
+  if (lw.slice(-1) === "s") s.push(lw.slice(0, -1));
+  if (lw.slice(-2) === "ly") s.push(lw.slice(0, -2));
+  return s.some(function (x) { return x.length >= 3 && COMMON.has(x); });
+}
+function lexisWorthWord(w, ctx) {
+  var lw = String(w || "").toLowerCase();
+  if (!lw || !ctx) return false;
+  if (ctx.nb && ctx.nb.has(lw)) return false;
+  if (ctx.known && ctx.known.has(lw)) return false;
+  if (ctx.seedWords && ctx.seedWords.has(lw)) return true;
+  if (w.indexOf("-") >= 0) return false;
+  if (lexisStemCommon(lw)) return false;
+  if (w.length < 6) return false;
+  if (/^[A-Z]/.test(w)) return false;          // a name, not vocabulary
+  if (!/^[a-z][a-z']*[a-z]$/i.test(w)) return false;
+  return true;
+}
+
+
+// ---------------------------------------------------------------------------
+// Word families: one word, one frequency, one band.
+//
+// The corpus counts SURFACE FORMS, so "intertwine" (0.17/million) and
+// "intertwined" (1.96/million) used to land in different bands — the base form
+// scored HARDER than its own inflection. A notebook that measures word families
+// has to price families. lexisLemmaCandidates() is the folding used both when
+// data/freqrank.txt is built and when it is queried, so the two cannot drift.
+// ---------------------------------------------------------------------------
+var LEXIS_IRREG = (function () {
+  // base: every irregular form of it
+  var V = {
+    arise: "arose arisen", awake: "awoke awoken", be: "am is are was were been being",
+    bear: "bore borne born", beat: "beaten", become: "became", begin: "began begun",
+    bend: "bent", bet: "bet", bind: "bound", bite: "bit bitten", bleed: "bled",
+    blow: "blew blown", break: "broke broken", breed: "bred", bring: "brought",
+    build: "built", burn: "burnt", burst: "burst", buy: "bought", cast: "cast",
+    catch: "caught", choose: "chose chosen", cling: "clung", come: "came",
+    cost: "cost", creep: "crept", cut: "cut", deal: "dealt", dig: "dug",
+    dive: "dove", do: "did done does", draw: "drew drawn", dream: "dreamt",
+    drink: "drank drunk", drive: "drove driven", dwell: "dwelt", eat: "ate eaten",
+    fall: "fell fallen", feed: "fed", feel: "felt", fight: "fought", find: "found",
+    flee: "fled", fling: "flung", fly: "flew flown", forbid: "forbade forbidden",
+    forget: "forgot forgotten", forgive: "forgave forgiven", forsake: "forsook forsaken",
+    freeze: "froze frozen", get: "got gotten", give: "gave given", go: "went gone goes",
+    grind: "ground", grow: "grew grown", hang: "hung", have: "had has having",
+    hear: "heard", hide: "hid hidden", hit: "hit", hold: "held", hurt: "hurt",
+    keep: "kept", kneel: "knelt", knit: "knit", know: "knew known", lay: "laid",
+    lead: "led", lean: "leant", leap: "leapt", learn: "learnt", leave: "left",
+    lend: "lent", let: "let", lie: "lay lain", light: "lit", lose: "lost",
+    make: "made", mean: "meant", meet: "met", mistake: "mistook mistaken",
+    overcome: "overcame", overtake: "overtook overtaken", pay: "paid", prove: "proven",
+    put: "put", quit: "quit", read: "read", rend: "rent", rid: "rid",
+    ride: "rode ridden", ring: "rang rung", rise: "rose risen", run: "ran",
+    saw: "sawn", say: "said says", see: "saw seen", seek: "sought", sell: "sold",
+    send: "sent", set: "set", sew: "sewn", shake: "shook shaken", shed: "shed",
+    shine: "shone", shoot: "shot", show: "shown", shrink: "shrank shrunk",
+    shut: "shut", sing: "sang sung", sink: "sank sunk", sit: "sat", slay: "slew slain",
+    sleep: "slept", slide: "slid", sling: "slung", slit: "slit", smell: "smelt",
+    sow: "sown", speak: "spoke spoken", speed: "sped", spell: "spelt", spend: "spent",
+    spill: "spilt", spin: "spun", spit: "spat", split: "split", spoil: "spoilt",
+    spread: "spread", spring: "sprang sprung", stand: "stood", steal: "stole stolen",
+    stick: "stuck", sting: "stung", stink: "stank stunk", strew: "strewn",
+    stride: "strode stridden", strike: "struck stricken", string: "strung",
+    strive: "strove striven", swear: "swore sworn", sweep: "swept", swell: "swollen",
+    swim: "swam swum", swing: "swung", take: "took taken", teach: "taught",
+    tear: "tore torn", tell: "told", think: "thought", thrive: "throve thriven",
+    throw: "threw thrown", thrust: "thrust", tread: "trod trodden",
+    undergo: "underwent undergone", understand: "understood", undertake: "undertook undertaken",
+    upset: "upset", wake: "woke woken", wear: "wore worn", weave: "wove woven",
+    weep: "wept", win: "won", wind: "wound", withdraw: "withdrew withdrawn",
+    withhold: "withheld", wring: "wrung", write: "wrote written",
+  };
+  // a handful of irregular plurals worth folding too
+  var N = {
+    child: "children", man: "men", woman: "women", person: "people", foot: "feet",
+    tooth: "teeth", goose: "geese", mouse: "mice", louse: "lice", ox: "oxen",
+    life: "lives", knife: "knives", wife: "wives", leaf: "leaves", loaf: "loaves",
+    thief: "thieves", shelf: "shelves", wolf: "wolves", half: "halves", calf: "calves",
+    self: "selves", analysis: "analyses", basis: "bases", crisis: "crises",
+    thesis: "theses", diagnosis: "diagnoses", hypothesis: "hypotheses",
+    phenomenon: "phenomena", criterion: "criteria", datum: "data", medium: "media",
+    curriculum: "curricula", memorandum: "memoranda", index: "indices",
+    appendix: "appendices", matrix: "matrices", vertex: "vertices",
+  };
+  var out = Object.create(null);
+  [V, N].forEach(function (tbl) {
+    Object.keys(tbl).forEach(function (base) {
+      tbl[base].split(" ").forEach(function (f) { if (f && !out[f]) out[f] = base; });
+    });
+  });
+  return out;
+})();
+
+// every form of `w` worth looking up, commonest resolution first
+function lexisLemmaCandidates(w) {
+  var lw = String(w || "").toLowerCase().trim().replace(/[\u2019]/g, "'");
+  if (!lw) return [];
+  lw = lw.replace(/n't$/, "").replace(/'(ll|re|ve|d|m|s)$/, "");
+  var out = [lw];
+  if (LEXIS_IRREG[lw]) out.push(LEXIS_IRREG[lw]);
+  var st = (typeof lexisStemCandidates === "function") ? (lexisStemCandidates(lw) || []) : [];
+  for (var i = 0; i < st.length; i++) {
+    if (out.indexOf(st[i]) === -1) out.push(st[i]);
+    if (LEXIS_IRREG[st[i]] && out.indexOf(LEXIS_IRREG[st[i]]) === -1) out.push(LEXIS_IRREG[st[i]]);
+  }
+  return out;
+}
+
+// The four bands, by family rank. Everything past the table — including a word
+// the table never heard of — is one band: we can't tell 25,000th from 40,000th
+// and won't pretend to.
+var LEXIS_RANK_BANDS = [
+  { key: "r1", max: 10000, cn: "1万以内",   en: "top 10k" },
+  { key: "r2", max: 15000, cn: "1万–1.5万", en: "10k–15k" },
+  { key: "r3", max: 20000, cn: "1.5万–2万", en: "15k–20k" },
+  { key: "r4", max: Infinity, cn: "2万以上", en: "20k+" },
+];
+var LEXIS_RANK_BAND_EN = {
+  r0: "unranked", r1: "top 10k", r2: "10–15k", r3: "15–20k", r4: "20k+",
+};
+var LEXIS_RANK_BAND_CN = {
+  r0: "无排名数据", r1: "1万以内", r2: "1万–1.5万", r3: "1.5万–2万", r4: "2万以上",
+};
+// A word with no rank is "r0" — NOT "r4". Conflating the two put the loudest
+// mark on screen next to ordinary vocabulary: "superstar" is missing from the
+// table (web2 is a 1913 list) and was therefore drawn as rarer than "orangutan".
+// Absence of evidence must render as silence, never as the strongest signal.
+function lexisRankBandOf(rank) {
+  if (rank == null || !isFinite(rank) || rank <= 0) return "r0";
+  for (var i = 0; i < LEXIS_RANK_BANDS.length; i++) {
+    if (rank <= LEXIS_RANK_BANDS[i].max) return LEXIS_RANK_BANDS[i].key;
+  }
+  return "r4";
+}
+
+if (typeof window !== "undefined") { window.LEXIS_SEED = LEXIS_SEED; window.LEXIS_SEED_FLAT = LEXIS_SEED_FLAT; window.LEXIS_FREQ = LEXIS_FREQ; window.LEXIS_COMMON = LEXIS_COMMON; window.LEXIS_MORPH = LEXIS_MORPH; window.lexisAnalyzeMorph = lexisAnalyzeMorph; window.lexisWordDomain = lexisWordDomain; window.LEXIS_SCENE_CN = LEXIS_SCENE_CN; window.lexisIdiomScene = lexisIdiomScene; window.LEXIS_PHRASE_SEED = LEXIS_PHRASE_SEED; window.LEXIS_PHRASE_SEED_FLAT = LEXIS_PHRASE_SEED_FLAT; window.lexisPhraseScene = lexisPhraseScene; window.lexisSingularize = lexisSingularize; window.LEXIS_PASSAGES = LEXIS_PASSAGES; window.LEXIS_BAND_SIZE = LEXIS_BAND_SIZE; window.LEXIS_BAND_SEQ = LEXIS_BAND_SEQ; window.LEXIS_BAND_LABEL = LEXIS_BAND_LABEL; window.lexisWordBand = lexisWordBand; window.lexisPassageTokens = lexisPassageTokens; window.lexisEstimateFromReading = lexisEstimateFromReading; window.LEXIS_PROPER_NOUNS = LEXIS_PROPER_NOUNS; window.LEXIS_JUNK_WORDS = LEXIS_JUNK_WORDS; window.lexisIsNoiseWord = lexisIsNoiseWord; window.LEXIS_ABBREV = LEXIS_ABBREV; window.lexisStemCandidates = lexisStemCandidates; window.LEXIS_PHRASE_LIST = LEXIS_PHRASE_LIST; window.LEXIS_PHRASE_EXAMPLE = LEXIS_PHRASE_EXAMPLE; window.LEXIS_PTYPE_CN = LEXIS_PTYPE_CN; window.LEXIS_KIND_CN = LEXIS_KIND_CN; window.LEXIS_PTYPE_RULE = LEXIS_PTYPE_RULE; window.lexisKindOf = lexisKindOf; window.lexisDataScore = lexisDataScore; window.lexisMergeData = lexisMergeData; window.lexisMergeWordPair = lexisMergeWordPair; window.lexisMergeNotebooks = lexisMergeNotebooks; window.lexisDedupeWords = lexisDedupeWords; window.lexisTombKeys = lexisTombKeys; window.lexisTombAt = lexisTombAt; window.lexisPhraseType = lexisPhraseType; window.LEXIS_PHAVE_LIST = LEXIS_PHAVE_LIST; window.LEXIS_PHAVE_MAP = LEXIS_PHAVE_MAP; window.LEXIS_DRILL_CN = LEXIS_DRILL_CN; window.LEXIS_DRILL_EN = LEXIS_DRILL_EN; window.lexisHashText = lexisHashText; window.lexisSentenceQuality = lexisSentenceQuality; window.lexisClozeSplit = lexisClozeSplit; window.lexisWordSentences = lexisWordSentences; window.lexisSenseFor = lexisSenseFor; window.lexisProduced = lexisProduced; window.lexisProduceTarget = lexisProduceTarget; window.lexisBuildDrill = lexisBuildDrill; window.lexisMarkDrill = lexisMarkDrill; window.LEXIS_STR_MAX = LEXIS_STR_MAX; window.LEXIS_DRILL_RUNG = LEXIS_DRILL_RUNG; window.lexisDrillRung = lexisDrillRung; window.lexisDrillScores = lexisDrillScores; window.lexisStrengthOf = lexisStrengthOf; window.lexisEditDistance = lexisEditDistance; window.lexisNormAns = lexisNormAns; window.lexisCheckAnswer = lexisCheckAnswer; window.lexisGradeFor = lexisGradeFor; window.LEXIS_SLOW_MS = LEXIS_SLOW_MS; window.lexisSchedule = lexisSchedule; window.lexisVideoRef = lexisVideoRef; window.lexisFmtAt = lexisFmtAt; window.LEXIS_FREQ_SUPP = LEXIS_FREQ_SUPP; window.LEXIS_PV_ALL = LEXIS_PV_ALL; window.LEXIS_EXPR_ALL = LEXIS_EXPR_ALL; window.LEXIS_IDIOM_SET = LEXIS_IDIOM_SET; window.LEXIS_TAB_WHAT = LEXIS_TAB_WHAT; window.lexisChunksWith = lexisChunksWith; window.lexisCleanChunk = lexisCleanChunk; window.LEXIS_COMPOUND_TAIL = LEXIS_COMPOUND_TAIL; window.lexisCompoundGloss = lexisCompoundGloss; window.lexisBreakdownParts = lexisBreakdownParts; window.lexisChunksInside = lexisChunksInside; window.lexisTermBreakdown = lexisTermBreakdown; window.lexisBreakdownUseful = lexisBreakdownUseful; window.LEXIS_QUICK_CORE = LEXIS_QUICK_CORE; window.LEXIS_QUICK_LEVELS = LEXIS_QUICK_LEVELS; window.LEXIS_QUICK_BANK = LEXIS_QUICK_BANK; window.LEXIS_PSEUDO = LEXIS_PSEUDO; window.lexisQuickRound = lexisQuickRound; window.lexisQuickTally = lexisQuickTally; window.lexisQuickEstimate = lexisQuickEstimate; window.lexisQuickFrontier = lexisQuickFrontier; window.lexisChunkSample = lexisChunkSample; window.lexisChunkTally = lexisChunkTally; window.lexisFmtRank = lexisFmtRank; window.lexisPoolPos = lexisPoolPos; window.lexisPhraseRank = lexisPhraseRank; window.lexisPhraseInfo = lexisPhraseInfo; window.lexisChunkKnown = lexisChunkKnown; window.lexisFindChunks = lexisFindChunks; window.lexisPhraseToks = lexisPhraseToks; window.lexisTokSame = lexisTokSame; window.lexisRankInfo = lexisRankInfo; window.lexisRankText = lexisRankText; window.lexisStemCommon = lexisStemCommon; window.lexisWorthWord = lexisWorthWord; window.LEXIS_IRREG = LEXIS_IRREG; window.lexisLemmaCandidates = lexisLemmaCandidates; window.LEXIS_RANK_BANDS = LEXIS_RANK_BANDS; window.LEXIS_RANK_BAND_CN = LEXIS_RANK_BAND_CN; window.LEXIS_RANK_BAND_EN = LEXIS_RANK_BAND_EN; window.lexisRankBandOf = lexisRankBandOf; }

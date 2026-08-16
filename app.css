@@ -36,6 +36,11 @@ main{padding:16px 16px 24px;max-width:640px;margin:0 auto}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;
   padding:16px;box-shadow:var(--shadow);margin-bottom:14px}
 .muted{color:var(--ink2)}
+.lk-ta{display:block;box-sizing:border-box;width:100%;resize:vertical;
+  font-family:Georgia,"Times New Roman",serif;font-size:15px;line-height:1.55;color:var(--ink);
+  background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:9px 11px;outline:none}
+.lk-ta:focus{border-color:var(--clay)}
+.lk-ta::placeholder{font-style:italic;color:var(--ink2)}
 .hr{height:1px;background:var(--line);border:0;margin:14px 0}
 h2.sec{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink2);
   margin:0 0 8px;font-weight:600}
@@ -161,6 +166,8 @@ select{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size
 .freq-low{background:#f4eef8;color:#8256a6;border-color:#e2d3ee}
 .freq-rare{background:#f6ecec;color:#a85454;border-color:#ecd5d5}
 .mfreq.nf{background:#f6ecec;color:#a85454;border-color:#ecd5d5}
+/* the rank sits right after the band chip, everywhere a chip is shown */
+.mrank{margin-left:5px;font-size:10px;color:var(--ink2);font-variant-numeric:tabular-nums;white-space:nowrap}
 
 /* frequency meter (词频) */
 .fbars{display:flex;gap:4px;margin:2px 0 8px}
@@ -244,8 +251,29 @@ select{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size
 .rev-two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .rev-two .linklike{grid-column:1 / -1;justify-self:center;margin-top:4px;font-size:12px}
 .rev-two .btn{padding:18px 8px;font-size:16px}
+/* the sublabel is a second line, not a continuation of the label */
+.rev-two .btn .d{display:block;font-size:11px;color:var(--ink2);margin-top:3px;font-weight:400}
+/* self-rated flip card: three thumb-sized targets on one row */
+.rev-two.rev-three{grid-template-columns:repeat(3,1fr)}
+.rev-two.rev-three .btn{padding:16px 6px;font-size:15px}
 .big-no{color:#c05a5a} .big-yes{background:var(--sage);border-color:var(--sage);color:#fff}
 .big-yes .d{color:rgba(255,255,255,.85)}
+/* the grade the card worked out for itself — one target, not a fresh decision */
+.rev-two.rev-auto{grid-template-columns:1fr}
+.rev-two.rev-auto .rv-over{grid-column:1 / -1;text-align:center;margin-top:6px;
+  font-size:12px;color:var(--ink2)}
+/* corrective feedback: what you wrote, next to what it wanted */
+.rv-fb{margin-top:14px}
+.rv-fb-msg{font-size:14px}
+.rv-fb.ok .rv-fb-msg{color:var(--sage)} .rv-fb.no .rv-fb-msg{color:#c05a5a}
+.rv-fb-cmp{margin-top:8px;font-size:15px;display:flex;gap:10px;align-items:baseline;
+  justify-content:center;flex-wrap:wrap}
+.rv-fb-cmp .you{color:var(--ink2);text-decoration:line-through}
+.rv-fb-cmp .arr{color:var(--ink2);font-size:12px}
+.rv-fb-cmp .want{font-family:Georgia,serif;font-weight:600;color:var(--ink)}
+/* the episode this sentence was heard in */
+.rv-vid{margin-top:8px;font-size:12px;color:var(--ink2)}
+.rv-vid a{color:var(--clay);text-decoration:none}
 
 /* toast with an Undo action */
 .toast.actionable{pointer-events:auto}
@@ -266,6 +294,8 @@ body.looking .nb-only{display:none}
 .chunk-chip{border:1px solid var(--line);background:var(--card);color:var(--ink);
   border-radius:10px;padding:8px 12px;font-size:14px;font-family:Georgia,serif;cursor:pointer}
 .chunk-chip.unk{background:var(--clay);border-color:var(--clay);color:#fff}
+/* quick check marks what you DO know, so it reads as a positive (sage), not a gap */
+.chunk-chip.kn{background:var(--sage);border-color:var(--sage);color:#fff}
 
 /* review home — streak + goal instead of dropping you straight into a card */
 .rev-home{text-align:center;padding:26px 18px}
@@ -361,3 +391,60 @@ body.looking .nb-only{display:none}
   font-size:15px;color:var(--ink)}
 .bd-d{font-size:12.5px;color:var(--ink2);margin-top:2px;line-height:1.55}
 .bd-inside{margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}
+
+/* ---- one frequency vocabulary, shared with the extension ---------------- */
+.mfreq.band-r1, .mfreq.band-r2, .mfreq.band-r3, .mfreq.band-r4, .mfreq.band-r0 {
+  display: inline-flex; align-items: center; gap: 5px; background: #f2ede4; color: #4a453f; }
+/* phrases: a different ruler, so a different-looking chip and no band swatch */
+.mfreq.phr { display: inline-flex; align-items: center; background: transparent;
+  color: var(--ink2); border: 1px solid var(--line); }
+.mfreq.phr.cur { border-style: dashed; }
+.bsw { width: 14px; height: 8px; border-radius: 2px; display: inline-block; flex: 0 0 auto; }
+.bsw.r1 { background: #f2cdbb; border-bottom: 2px solid #c0603e; }
+.bsw.r2 { background: #f7e0b4; border-bottom: 2px solid #dda45f; }
+.bsw.r3 { background: #faeeda; border-bottom: 1.5px solid #e3c9a5; }
+.bsw.r4 { border-bottom: 1px solid #d9cdb8; }
+.bsw.r0 { border-bottom: 1px dashed #ddd6c8; }
+.freq-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 12.5px; color: #8a8175; margin: 2px 0 4px; }
+.freq-line .fnote { font-size: 11.5px; }
+
+/* ---- Discover · My library (episodes recorded on the desktop) ----------- */
+.vcard{display:flex;gap:12px;align-items:stretch;padding:10px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.vcard img{width:112px;height:63px;object-fit:cover;border-radius:8px;background:var(--paper2);flex:0 0 auto}
+.vc-b{min-width:0;display:flex;flex-direction:column;justify-content:center;gap:3px}
+.vc-t{font-family:Georgia,serif;font-size:15px;line-height:1.35;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.vc-n{font-size:12px;color:var(--ink2)}
+.vc-bars{display:flex;flex-wrap:wrap;gap:8px;font-size:11px;color:var(--ink2)}
+.vbit{display:inline-flex;align-items:center;gap:4px}
+.vgrp{display:flex;align-items:center;gap:7px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--ink2);margin:14px 0 4px}
+.vrow{display:grid;grid-template-columns:20px minmax(0,1fr);gap:9px;align-items:start;
+  padding:9px 2px;border-bottom:1px solid var(--line)}
+.vrow.done{opacity:.5}
+.vrow input{margin-top:5px;accent-color:var(--clay)}
+.vr{font-size:11px;color:var(--ink2);margin-left:7px;font-variant-numeric:tabular-nums}
+.vs{font-size:12px;color:var(--ink2);line-height:1.5;margin-top:2px}
+.vact{position:sticky;bottom:calc(64px + env(safe-area-inset-bottom));display:flex;gap:8px;
+  padding:10px 0;background:var(--paper);border-top:1px solid var(--line);margin-top:8px}
+.vact .btn{flex:1;font-size:13px;padding:9px 6px}
+/* the transcript: the same marks the subtitle sidebar drew, from the saved
+   snapshot's own ranks — no network, and a word looks identical in both */
+.vscript{margin-top:8px}
+.vline{display:grid;grid-template-columns:46px minmax(0,1fr);gap:10px;padding:7px 0;
+  border-bottom:1px solid var(--paper2);font-size:14px;line-height:1.6}
+.vline > a{color:var(--ink2);font-size:11.5px;text-decoration:none;font-variant-numeric:tabular-nums}
+.vl-zh{color:var(--ink2);font-size:12.5px;margin-top:2px}
+.vscript w.r1{background:#f2cdbb;border-bottom:2px solid #c0603e;color:#6d2f16;font-weight:700;border-radius:3px}
+.vscript w.r2{background:linear-gradient(transparent 58%,#f7e0b4 58%);border-bottom:2px solid #dda45f}
+.vscript w.r3{background:linear-gradient(transparent 62%,#faeeda 62%);border-bottom:1.5px solid #e3c9a5}
+.vscript w.r4{border-bottom:1px solid #d9cdb8}
+.vscript w.nb{border-bottom:3px double #8d7cb8}
+.vscript w.mastered{border-bottom:1px dotted #bfb4d4}
+/* a phrase spans several words, so its rule is drawn 3px lower and the words'
+   own marks stay readable above it */
+.vscript c.ck{border-bottom:2px solid #9dbb99;padding-bottom:3px}
+.vscript c.ck.nb{border-bottom-color:#8d7cb8}
+.vscript c.ck.mastered{border-bottom:1px dotted #cfc7de}
+.bsw.ck{border-bottom:2px solid #9dbb99}
