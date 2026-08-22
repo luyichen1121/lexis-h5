@@ -523,3 +523,9 @@ body.looking .nb-only{display:none}
    FILE, not from this page, and only re-saving on the Mac brings them back */
 .vfloor{margin:0 0 10px;padding:8px 10px;font-size:12px;line-height:1.6;color:var(--ink2);
   background:var(--paper2);border-left:2px solid var(--clay);border-radius:0 8px 8px 0}
+
+/* Pronounce, next to a study word (Discover). Offline pool → no audio URL, so
+   this is the browser's voice; same button the review card uses. */
+.study-say { border: none; background: none; padding: 0 2px; margin-left: 2px;
+  font-size: 15px; line-height: 1; cursor: pointer; opacity: .55; }
+.study-say:active { opacity: 1; }

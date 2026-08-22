@@ -289,12 +289,21 @@
     const tailed = trimTail(w);
     if (tailed.length !== w.length) add(tailed.join(" "));
     if (light) add(trimTail(light).join(" "));
-    if (w.length <= 4) {
+    // a negator is never dropped — "not only" → `only` is an inverted meaning,
+    // not a shorter one (see PH_NEG in background.js)
+    if (w.length <= 4 && !w.some((x) => PH_NEG.test(x))) {
       const head = (light || w).filter((x) => !PH_SKIP.test(x))[0];
       if (head && /^[a-z][a-z'-]*$/.test(head)) add(head);
     }
     return out.slice(0, 8);
   }
+  // A NEGATOR is never dropped. Every other rung of this ladder trades a fragment
+  // for a shorter form of the same unit; taking the head out of "not only" hands
+  // back `only` — whose entry ("Alone in a category") is not a shorter version of
+  // the meaning, it is the opposite of it, and it arrived as 单独在一个类别中。 in
+  // a row that should read 不仅. A miss is recoverable (the term itself gets
+  // translated instead); an inverted definition is not.
+  const PH_NEG = /^(not|no|never|nor|neither|none|nothing|nobody|without|n't|cannot)$/;
   const PH_TAIL = /^(about|of|to|for|with|on|in|at|from|into|onto|over|by|as|up|down|out|off|away|back|through|around|against|that|it|sth|sb|somebody|someone|something|one's|his|her|their|your|my|its|the|a|an)$/;
   const PH_LIGHT = /^(get|gets|got|gotten|getting|be|is|am|are|was|were|been|being|become|becomes|became|becoming|feel|feels|felt|feeling|seem|seems|seemed)$/;
   const PH_SKIP = /^(a|an|the|to|of|in|on|at|by|for|with|from|into|onto|over|about|as|and|or|but|not|no|it|its|this|that|these|those|my|your|his|her|their|our|one's|be|is|am|are|was|were|been|being|have|has|had|do|does|did|will|would|can|could|shall|should|may|might|must|get|got|make|made|take|took)$/;
@@ -846,7 +855,9 @@
       : (p.examples || []).slice(0, 4);
     if (wantCn) {
       const needEx = (p.examples || []).filter((e) => !e.translation);
-      const needSense = (p.meanings || []).slice(0, 3).filter((m) => !m.cn);
+      // every sense missing one, not the first three — a fourth row in English
+      // only, next to three bilingual rows, reads as a bug (it is one batch)
+      const needSense = (p.meanings || []).filter((m) => !m.cn && m.definition);
       const batch = needEx.map((e) => e.text).concat(needSense.map((m) => m.definition));
       if (batch.length) {
         const zh = await translateBatch(batch);
@@ -2572,7 +2583,13 @@
     const hdr = t ? { Authorization: "Bearer " + t, Accept: "application/vnd.github+json" } : {};
     try {
       if (idx && idx.raw) {
-        const r = await fetch(idx.raw, { headers: hdr });
+        // NO Authorization on a raw gist URL. The raw host does not answer a CORS
+      // preflight (OPTIONS → 403, no Access-Control-Allow-Headers), and sending
+      // a header the browser considers non-simple is what forces one — so every
+      // fetch of an episode file failed on the phone with "the episode's file
+      // wasn't in the gist" while the file was sitting right there. The raw URL
+      // carries the gist id and the blob sha, so it needs no token.
+      const r = await fetch(idx.raw);
         if (r.ok) { vidFull[id] = JSON.parse(await r.text()); delete vidLoad[id]; return vidFull[id]; }
       }
       if (gid) {
@@ -2581,7 +2598,7 @@
           const g = await r.json();
           const f = g.files && g.files["v-" + String(id).replace(/[^A-Za-z0-9_-]/g, "") + ".json"];
           let txt = f && f.content;
-          if (f && !txt && f.raw_url) { const rr = await fetch(f.raw_url, { headers: hdr }); if (rr.ok) txt = await rr.text(); }
+          if (f && !txt && f.raw_url) { const rr = await fetch(f.raw_url); if (rr.ok) txt = await rr.text(); }   // no token — see above
           if (txt) { vidFull[id] = JSON.parse(txt); delete vidLoad[id]; return vidFull[id]; }
         }
       }
@@ -3186,7 +3203,7 @@
       const ex = pv ? "" : (window.LEXIS_PHRASE_EXAMPLE && window.LEXIS_PHRASE_EXAMPLE.get(norm(term))) || "";
       const hiEx = ex ? esc(ex).replace(new RegExp("(" + term.split(/\s*\/\s*/)[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+") + "\\w*)", "i"), "<mark>$1</mark>") : "";
       return `<div class="study${ex ? " has-ex" : ""}" data-term="${esc(term)}">
-        <span class="term serif">${esc(term)}</span>
+        <span class="term serif">${esc(term)}</span><button class="study-say" data-act="say" title="Pronounce">🔊</button>
         ${(() => { const r = rankInfoOf(term, null); return r ? `<span class="mrank" title="${esc(r.title)}">${esc(r.text)}</span>` : ""; })()}
         ${scene ? `<span class="g">${esc(scene)}</span>` : ""}
         <span class="act">
@@ -3202,6 +3219,10 @@
         toast("Looking up……"); const p = await lookupFull(term);
         saveWord(p); toast("Added to your notebook <b>" + esc(term) + "</b>"); row.remove(); refreshBadge();
       });
+      // hearing the word is part of learning it — the study pool is offline, so
+      // this is the browser's own voice (same as the review card's ▸)
+      const say = row.querySelector('[data-act="say"]');
+      if (say) say.addEventListener("click", (ev) => { ev.stopPropagation(); speak(term, ""); });
       row.querySelector('[data-act="master"]').addEventListener("click", () => {
         const a = getAssess(); if (!a.known.map(norm).includes(norm(term))) a.known.push(term);
         setAssess(a); toast("Marked known"); row.remove();
@@ -3269,7 +3290,7 @@
         <p class="muted" style="font-size:12px;margin:-4px 0 8px;line-height:1.6">「English= English-only study:No Chinese gloss or example translation anywhere, and review options are English definitions. The Chinese stays stored — switch back any time.</p>
         <label class="set" style="align-items:flex-start">Review card <span class="subtabs" style="margin:0;flex-wrap:wrap;justify-content:flex-end">${[["auto", "Auto"], ["en2cn", "Word→meaning"], ["cloze", "Cloze"], ["zh2en", "Meaning→word"], ["flip", "Flip card"]].map(([k, lab]) =>
             `<button class="${(s.reviewDrill || "auto") === k ? "on" : ""}" data-drill="${k}">${lab}</button>`).join("")}</span></label>
-        <p class="muted" style="font-size:12px;margin:-4px 0 8px;line-height:1.6">Auto climbs a ladder as a word matures: pick the meaning → pick the word → write it into a sentence. <b>Flip card</b> is the classic self-marked card — it moves the schedule, but it never counts toward <b>produced</b> and can't earn <b>Mastered</b>, because you weren't asked to produce anything.</p>
+        <p class="muted" style="font-size:12px;margin:-4px 0 8px;line-height:1.6">Auto climbs a ladder as a word matures: pick the meaning → pick the word → write it into a sentence. <b>Flip card</b> is the classic self-marked card — it moves the schedule, but it never counts toward <b>produced</b> and can't earn <b>known</b>, because you weren't asked to produce anything.</p>
         <label class="set">Show examples <input type="checkbox" id="setEx" ${s.showExamples ? "checked" : ""}></label>
         <label class="set">Auto top-up (examples / gloss / frequency) <input type="checkbox" id="setAuto" ${s.autoEnrich !== false ? "checked" : ""}></label>
         <label class="set">My vocabulary size <input type="number" id="setLvl" value="${Number(s.vocabLevel) || 0}" min="0" max="40000" step="500" inputmode="numeric" style="width:88px"></label>
@@ -3301,7 +3322,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.109.4 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.109.5 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
