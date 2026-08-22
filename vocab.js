@@ -4299,7 +4299,17 @@ function lexisAlignZh(x, z, from, to) {
     }
     if (keep.length >= zs.length) keep = [];      // it selected everything — no better than the whole line
   }
-  return keep.length ? keep.join("") : z;
+  if (keep.length) return keep.join("");
+  // NOTHING BEATS THE WRONG THING.
+  //
+  // The fallback used to be "hand back the whole line", and that is what put a
+  // four-sentence paragraph beside a one-sentence row over and over. Return the
+  // line ONLY when the row is showing all of it; when the row shows a part we
+  // could not place, say nothing — an empty cell is a gap, a mismatched
+  // paragraph is a wrong answer, and the page already offers to translate the
+  // lines it has not reached.
+  var covers = (to - from) >= (x.length - 2);
+  return covers ? z : "";
 }
 // Where in `lines` does this snapshot row's sentence sit? Shared by the two
 // things that need it: the Chinese for the row, and re-cutting the sentence
@@ -4355,13 +4365,116 @@ function lexisSnapLocate(lines, sent, at) {
 // of a sentence as though it were the sentence ("eternity.", "far from
 // tranquil."). The transcript is in the same file, so the row can be re-cut on
 // screen instead of waiting for you to record the episode again.
-function lexisSnapSentence(lines, sent, at) {
+function lexisSnapSentence(lines, sent, at, term) {
+  var raw = String(sent || "");
+  var out = raw;
   var loc = lexisSnapLocate(lines, sent, at);
-  if (!loc) return String(sent || "");
-  var ls = lines, g = function (k) { return (ls[k] || {}).x || ""; };
-  var out = lexisSentenceAt(g(loc.start), loc.off, g(loc.start - 1), g(loc.start + 1));
-  // never hand back LESS than was stored
-  return out.length >= String(sent || "").length ? out : String(sent || "");
+  if (loc) {
+    var g = function (k) { return ((lines || [])[k] || {}).x || ""; };
+    // The re-cut wins, longer OR SHORTER. Refusing to shorten sounds safe and is
+    // backwards: the snapshots that need fixing are as often the ones the old
+    // extractor made TOO LONG by borrowing the next line when it should not
+    // have. lexisSnapLocate() has already proved this is the right place.
+    out = lexisSentenceAt(g(loc.start), loc.off, g(loc.start - 1), g(loc.start + 1)) || raw;
+  }
+  // A ROW'S SENTENCE HAS TO CONTAIN ITS OWN WORD.
+  //
+  // "Others, like Atlas, were punished uniquely, doomed to hold the sky upon
+  // his shoulders for all" is the row for `eternity` — cut off one word before
+  // it. Whatever produced that, the line the locator found does contain the
+  // word, so cut around THAT instead: a sentence that does not contain the word
+  // it is illustrating is not a context, it is a coincidence.
+  var tw = String(term || "").trim();
+  if (loc && tw && out.toLowerCase().indexOf(tw.toLowerCase()) === -1) {
+    var lineTxt = ((lines || [])[loc.start] || {}).x || "";
+    var kw = lineTxt.toLowerCase().indexOf(tw.toLowerCase());
+    if (kw !== -1) {
+      var g2 = function (k) { return ((lines || [])[k] || {}).x || ""; };
+      out = lexisSentenceAt(lineTxt, kw, g2(loc.start - 1), g2(loc.start + 1)) || out;
+    } else if (loc.end > loc.start) {
+      for (var q2 = loc.start + 1; q2 <= loc.end; q2++) {
+        var lt2 = ((lines || [])[q2] || {}).x || "";
+        var k2 = lt2.toLowerCase().indexOf(tw.toLowerCase());
+        if (k2 !== -1) {
+          var g3 = function (k) { return ((lines || [])[k] || {}).x || ""; };
+          out = lexisSentenceAt(lt2, k2, g3(q2 - 1), g3(q2 + 1)) || out;
+          break;
+        }
+      }
+    }
+  }
+
+  // ONE SENTENCE, WHATEVER HAPPENED ABOVE.
+  //
+  // Every path here used to be conditional — no transcript, a locate that did
+  // not prove, a stored string the locator could not place — and each of those
+  // handed the whole stored string back untouched. That is how a row still read
+  // "…to atone for a tragic mistake. Perseus guided by Athena and Hermes slayed
+  // the Gorgon Medusa": one finished sentence plus the opening of the next.
+  // So the trim is not a branch any more, it is the last thing that happens:
+  // find the word in whatever we are about to return, and keep the sentence it
+  // is actually in.
+  var t = String(term || "").trim();
+  if (t) {
+    var low = out.toLowerCase(), lt = t.toLowerCase();
+    // a whole word first, so "on" does not match inside "Gorgon"
+    var k = -1, re;
+    try {
+      re = new RegExp("(^|[^A-Za-z])" + lt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      var m = re.exec(out);
+      if (m) k = m.index + m[1].length;
+    } catch (e) {}
+    if (k === -1) k = low.indexOf(lt);
+    if (k === -1 && lt.length > 4) k = low.indexOf(lt.slice(0, lt.length - 3));
+    if (k !== -1) out = lexisSentenceAt(out, k, "", "") || out;
+  }
+  return out;
+}
+
+// WHEN this row's sentence is actually said. The sentence is resolved by
+// CONTENT (lexisSnapLocate), while `at` is whatever the snapshot happened to
+// record for the word — after a fold, a re-cut, or on an old snapshot the two
+// disagree, and playback then landed on a different part of the video than the
+// sentence on screen. One resolution, one answer.
+//
+// The end is the line AFTER the last one the sentence covers, so a sentence
+// spanning two lines is heard whole instead of being cut at the first line.
+function lexisSnapRange(lines, sent, at) {
+  var ls = lines || [];
+  var loc = lexisSnapLocate(ls, sent, at);
+  var i = loc ? loc.start : -1;
+  if (!(i >= 0 && ls[i] && ls[i].t != null)) {
+    var a0 = Math.max(0, Math.floor(at || 0));
+    return { from: a0, to: a0 + 12 };
+  }
+  var j = loc.end >= i ? loc.end : i;
+  var norm = function (x) { return String(x == null ? "" : x).replace(/\s+/g, " ").trim(); };
+  // A LINE has a timestamp; a SENTENCE INSIDE IT does not. Starting at the
+  // line meant a row whose sentence is the second or third one in that line
+  // played from something else entirely — "对不上". There is no recorded time
+  // for it, but the line's own span can be divided by where the sentence sits
+  // in the text: an estimate, and a much better one than the line's start.
+  var span = function (k) {
+    var t0 = ls[k].t, t1 = ls[k + 1] && ls[k + 1].t != null ? ls[k + 1].t : t0 + 12;
+    return { t0: t0, dur: Math.max(1, t1 - t0), len: Math.max(1, norm(ls[k].x).length) };
+  };
+  var a = span(i);
+  var from = a.t0 + (loc.off / a.len) * a.dur;
+  // a beat of lead-in, so the first word is not clipped by the estimate
+  from = Math.max(a.t0, from - 0.4);
+  var to;
+  if (j > i) {
+    var b = span(j);
+    var reach = String(sent || "").length - (a.len - loc.off);
+    for (var k = i + 1; k < j; k++) reach -= span(k).len + 1;
+    to = b.t0 + (Math.max(0, Math.min(b.len, reach)) / b.len) * b.dur;
+  } else {
+    to = a.t0 + Math.min(1, (loc.off + String(sent || "").length) / a.len) * a.dur;
+  }
+  from = Math.max(0, Math.floor(from));
+  to = Math.ceil(to);
+  if (!(to > from + 1)) to = from + 12;
+  return { from: from, to: to };
 }
 function lexisSnapZh(lines, sent, at) {
   var ls = lines || [];
@@ -4379,7 +4492,10 @@ function lexisSnapZh(lines, sent, at) {
     var part = lexisAlignZh(x, z, from, to);
     // a span's translation sits on its head line, so two covered lines can carry
     // the same string — say it once
-    if (part && out.indexOf(part) === -1) out.push(part);
+    // adjacent lines can carry overlapping translations (a span's Chinese sits on
+    // its head line); an exact-match check let the overlap through and the
+    // column stuttered — "…改变宇宙。…改变宇宙。"
+    if (part && !out.some(function (q2) { return q2.indexOf(part) !== -1 || part.indexOf(q2) !== -1; })) out.push(part);
   }
   return out.join("");
 }
@@ -4454,8 +4570,22 @@ function lexisSafeHead(surface, head) {
   var w = String(surface || "").toLowerCase();
   var h = String(head || "").toLowerCase();
   if (!h || h === w) return w;
+  // an irregular the table itself vouches for (ran → run, children → child)
+  if (typeof LEXIS_IRREG !== "undefined" && LEXIS_IRREG && LEXIS_IRREG[w] === h) return h;
+  // Otherwise the word you read has to be the head plus a real INFLECTION.
+  // Derivational endings are where the table goes wrong: it strips -ion and
+  // lands on whatever is left if web2 happens to list it, so `ambition` became
+  // `ambit` ("范围、界限") and `greed` became `gree` ("a step"). A plural or a
+  // tense is the same word; a derivation is a different one.
+  var f = [h + "s", h + "es", h + "ed", h + "d", h + "ing", h + "er", h + "est"];
+  if (/e$/.test(h)) { var b = h.slice(0, -1); f.push(b + "ing", b + "ed", b + "er", b + "est"); }
+  if (/y$/.test(h)) { var y = h.slice(0, -1); f.push(y + "ies", y + "ied", y + "ier", y + "iest"); }
+  var dd = h + h.slice(-1);
+  f.push(dd + "ing", dd + "ed", dd + "er", dd + "est");
+  if (f.indexOf(w) === -1) return w;
+  // …and the one shape inflection cannot separate: `gree`+d and `seethe`+d
   if (/d$/.test(w) && h === w.slice(0, -1) && h.length < 5) return w;
   return h;
 }
 
-if (typeof window !== "undefined") { window.LEXIS_SEED = LEXIS_SEED; window.LEXIS_SEED_FLAT = LEXIS_SEED_FLAT; window.LEXIS_FREQ = LEXIS_FREQ; window.LEXIS_COMMON = LEXIS_COMMON; window.LEXIS_MORPH = LEXIS_MORPH; window.lexisAnalyzeMorph = lexisAnalyzeMorph; window.lexisWordDomain = lexisWordDomain; window.LEXIS_SCENE_CN = LEXIS_SCENE_CN; window.lexisIdiomScene = lexisIdiomScene; window.LEXIS_PHRASE_SEED = LEXIS_PHRASE_SEED; window.LEXIS_PHRASE_SEED_FLAT = LEXIS_PHRASE_SEED_FLAT; window.lexisPhraseScene = lexisPhraseScene; window.lexisSingularize = lexisSingularize; window.LEXIS_PASSAGES = LEXIS_PASSAGES; window.LEXIS_BAND_SIZE = LEXIS_BAND_SIZE; window.LEXIS_BAND_SEQ = LEXIS_BAND_SEQ; window.LEXIS_BAND_LABEL = LEXIS_BAND_LABEL; window.lexisWordBand = lexisWordBand; window.lexisPassageTokens = lexisPassageTokens; window.lexisEstimateFromReading = lexisEstimateFromReading; window.LEXIS_PROPER_NOUNS = LEXIS_PROPER_NOUNS; window.LEXIS_JUNK_WORDS = LEXIS_JUNK_WORDS; window.lexisIsNoiseWord = lexisIsNoiseWord; window.LEXIS_ABBREV = LEXIS_ABBREV; window.lexisStemCandidates = lexisStemCandidates; window.LEXIS_PHRASE_LIST = LEXIS_PHRASE_LIST; window.LEXIS_PHRASE_EXAMPLE = LEXIS_PHRASE_EXAMPLE; window.LEXIS_PTYPE_CN = LEXIS_PTYPE_CN; window.LEXIS_KIND_CN = LEXIS_KIND_CN; window.LEXIS_PTYPE_RULE = LEXIS_PTYPE_RULE; window.lexisKindOf = lexisKindOf; window.lexisDataScore = lexisDataScore; window.lexisMergeData = lexisMergeData; window.lexisMergeWordPair = lexisMergeWordPair; window.lexisMergeNotebooks = lexisMergeNotebooks; window.lexisDedupeWords = lexisDedupeWords; window.lexisTombKeys = lexisTombKeys; window.lexisTombAt = lexisTombAt; window.lexisPhraseType = lexisPhraseType; window.LEXIS_PHAVE_LIST = LEXIS_PHAVE_LIST; window.LEXIS_PHAVE_MAP = LEXIS_PHAVE_MAP; window.LEXIS_DRILL_CN = LEXIS_DRILL_CN; window.LEXIS_DRILL_EN = LEXIS_DRILL_EN; window.lexisHashText = lexisHashText; window.lexisSentenceQuality = lexisSentenceQuality; window.lexisClozeSplit = lexisClozeSplit; window.lexisWordSentences = lexisWordSentences; window.lexisSenseFor = lexisSenseFor; window.lexisProduced = lexisProduced; window.lexisProduceTarget = lexisProduceTarget; window.lexisBuildDrill = lexisBuildDrill; window.lexisMarkDrill = lexisMarkDrill; window.LEXIS_STR_MAX = LEXIS_STR_MAX; window.LEXIS_DRILL_RUNG = LEXIS_DRILL_RUNG; window.lexisDrillRung = lexisDrillRung; window.lexisDrillScores = lexisDrillScores; window.lexisStrengthOf = lexisStrengthOf; window.lexisEditDistance = lexisEditDistance; window.lexisNormAns = lexisNormAns; window.lexisCheckAnswer = lexisCheckAnswer; window.lexisGradeFor = lexisGradeFor; window.LEXIS_SLOW_MS = LEXIS_SLOW_MS; window.lexisSchedule = lexisSchedule; window.lexisVideoRef = lexisVideoRef; window.lexisFmtAt = lexisFmtAt; window.LEXIS_FREQ_SUPP = LEXIS_FREQ_SUPP; window.LEXIS_PV_ALL = LEXIS_PV_ALL; window.LEXIS_EXPR_ALL = LEXIS_EXPR_ALL; window.LEXIS_IDIOM_SET = LEXIS_IDIOM_SET; window.LEXIS_TAB_WHAT = LEXIS_TAB_WHAT; window.lexisChunksWith = lexisChunksWith; window.lexisCleanChunk = lexisCleanChunk; window.LEXIS_COMPOUND_TAIL = LEXIS_COMPOUND_TAIL; window.lexisCompoundGloss = lexisCompoundGloss; window.lexisBreakdownParts = lexisBreakdownParts; window.lexisChunksInside = lexisChunksInside; window.lexisTermBreakdown = lexisTermBreakdown; window.lexisBreakdownUseful = lexisBreakdownUseful; window.LEXIS_QUICK_CORE = LEXIS_QUICK_CORE; window.LEXIS_QUICK_LEVELS = LEXIS_QUICK_LEVELS; window.LEXIS_QUICK_BANK = LEXIS_QUICK_BANK; window.LEXIS_PSEUDO = LEXIS_PSEUDO; window.lexisQuickRound = lexisQuickRound; window.lexisQuickTally = lexisQuickTally; window.lexisQuickEstimate = lexisQuickEstimate; window.lexisQuickFrontier = lexisQuickFrontier; window.lexisChunkSample = lexisChunkSample; window.lexisChunkTally = lexisChunkTally; window.lexisFmtRank = lexisFmtRank; window.lexisPoolPos = lexisPoolPos; window.lexisPhraseRank = lexisPhraseRank; window.lexisPhraseInfo = lexisPhraseInfo; window.lexisChunkKnown = lexisChunkKnown; window.lexisFindChunks = lexisFindChunks; window.LEXIS_VPAT = LEXIS_VPAT; window.LEXIS_VPAT_MAP = LEXIS_VPAT_MAP; window.LEXIS_VPAT_GAP = LEXIS_VPAT_GAP; window.lexisFindVPats = lexisFindVPats; window.lexisFindUnits = lexisFindUnits; window.lexisVPatInfo = lexisVPatInfo; window.lexisIsVPat = lexisIsVPat; window.lexisChunkWorthMarking = lexisChunkWorthMarking; window.lexisFoldFamilies = lexisFoldFamilies; window.lexisPhraseToks = lexisPhraseToks; window.lexisTokSame = lexisTokSame; window.lexisRankInfo = lexisRankInfo; window.lexisRankText = lexisRankText; window.lexisStemCommon = lexisStemCommon; window.lexisWorthWord = lexisWorthWord; window.LEXIS_IRREG = LEXIS_IRREG; window.lexisLemmaCandidates = lexisLemmaCandidates; window.LEXIS_RANK_BANDS = LEXIS_RANK_BANDS; window.LEXIS_RANK_BAND_CN = LEXIS_RANK_BAND_CN; window.LEXIS_RANK_BAND_EN = LEXIS_RANK_BAND_EN; window.lexisRankBandOf = lexisRankBandOf; window.LEXIS_FORM_OF = LEXIS_FORM_OF; window.lexisIsFormOf = lexisIsFormOf; window.lexisFormOfBase = lexisFormOfBase; window.lexisRankSenses = lexisRankSenses; window.lexisBestSense = lexisBestSense; window.lexisPosKey = lexisPosKey; window.lexisGlossGroups = lexisGlossGroups; window.lexisGlossParts = lexisGlossParts; window.lexisCleanGloss = lexisCleanGloss; window.lexisGlossLine = lexisGlossLine; window.lexisSnapZh = lexisSnapZh; window.lexisCapGloss = lexisCapGloss; window.lexisAlignZh = lexisAlignZh; window.lexisSentenceAt = lexisSentenceAt; window.lexisSafeHead = lexisSafeHead; window.lexisSnapLocate = lexisSnapLocate; window.lexisSnapSentence = lexisSnapSentence; }
+if (typeof window !== "undefined") { window.LEXIS_SEED = LEXIS_SEED; window.LEXIS_SEED_FLAT = LEXIS_SEED_FLAT; window.LEXIS_FREQ = LEXIS_FREQ; window.LEXIS_COMMON = LEXIS_COMMON; window.LEXIS_MORPH = LEXIS_MORPH; window.lexisAnalyzeMorph = lexisAnalyzeMorph; window.lexisWordDomain = lexisWordDomain; window.LEXIS_SCENE_CN = LEXIS_SCENE_CN; window.lexisIdiomScene = lexisIdiomScene; window.LEXIS_PHRASE_SEED = LEXIS_PHRASE_SEED; window.LEXIS_PHRASE_SEED_FLAT = LEXIS_PHRASE_SEED_FLAT; window.lexisPhraseScene = lexisPhraseScene; window.lexisSingularize = lexisSingularize; window.LEXIS_PASSAGES = LEXIS_PASSAGES; window.LEXIS_BAND_SIZE = LEXIS_BAND_SIZE; window.LEXIS_BAND_SEQ = LEXIS_BAND_SEQ; window.LEXIS_BAND_LABEL = LEXIS_BAND_LABEL; window.lexisWordBand = lexisWordBand; window.lexisPassageTokens = lexisPassageTokens; window.lexisEstimateFromReading = lexisEstimateFromReading; window.LEXIS_PROPER_NOUNS = LEXIS_PROPER_NOUNS; window.LEXIS_JUNK_WORDS = LEXIS_JUNK_WORDS; window.lexisIsNoiseWord = lexisIsNoiseWord; window.LEXIS_ABBREV = LEXIS_ABBREV; window.lexisStemCandidates = lexisStemCandidates; window.LEXIS_PHRASE_LIST = LEXIS_PHRASE_LIST; window.LEXIS_PHRASE_EXAMPLE = LEXIS_PHRASE_EXAMPLE; window.LEXIS_PTYPE_CN = LEXIS_PTYPE_CN; window.LEXIS_KIND_CN = LEXIS_KIND_CN; window.LEXIS_PTYPE_RULE = LEXIS_PTYPE_RULE; window.lexisKindOf = lexisKindOf; window.lexisDataScore = lexisDataScore; window.lexisMergeData = lexisMergeData; window.lexisMergeWordPair = lexisMergeWordPair; window.lexisMergeNotebooks = lexisMergeNotebooks; window.lexisDedupeWords = lexisDedupeWords; window.lexisTombKeys = lexisTombKeys; window.lexisTombAt = lexisTombAt; window.lexisPhraseType = lexisPhraseType; window.LEXIS_PHAVE_LIST = LEXIS_PHAVE_LIST; window.LEXIS_PHAVE_MAP = LEXIS_PHAVE_MAP; window.LEXIS_DRILL_CN = LEXIS_DRILL_CN; window.LEXIS_DRILL_EN = LEXIS_DRILL_EN; window.lexisHashText = lexisHashText; window.lexisSentenceQuality = lexisSentenceQuality; window.lexisClozeSplit = lexisClozeSplit; window.lexisWordSentences = lexisWordSentences; window.lexisSenseFor = lexisSenseFor; window.lexisProduced = lexisProduced; window.lexisProduceTarget = lexisProduceTarget; window.lexisBuildDrill = lexisBuildDrill; window.lexisMarkDrill = lexisMarkDrill; window.LEXIS_STR_MAX = LEXIS_STR_MAX; window.LEXIS_DRILL_RUNG = LEXIS_DRILL_RUNG; window.lexisDrillRung = lexisDrillRung; window.lexisDrillScores = lexisDrillScores; window.lexisStrengthOf = lexisStrengthOf; window.lexisEditDistance = lexisEditDistance; window.lexisNormAns = lexisNormAns; window.lexisCheckAnswer = lexisCheckAnswer; window.lexisGradeFor = lexisGradeFor; window.LEXIS_SLOW_MS = LEXIS_SLOW_MS; window.lexisSchedule = lexisSchedule; window.lexisVideoRef = lexisVideoRef; window.lexisFmtAt = lexisFmtAt; window.LEXIS_FREQ_SUPP = LEXIS_FREQ_SUPP; window.LEXIS_PV_ALL = LEXIS_PV_ALL; window.LEXIS_EXPR_ALL = LEXIS_EXPR_ALL; window.LEXIS_IDIOM_SET = LEXIS_IDIOM_SET; window.LEXIS_TAB_WHAT = LEXIS_TAB_WHAT; window.lexisChunksWith = lexisChunksWith; window.lexisCleanChunk = lexisCleanChunk; window.LEXIS_COMPOUND_TAIL = LEXIS_COMPOUND_TAIL; window.lexisCompoundGloss = lexisCompoundGloss; window.lexisBreakdownParts = lexisBreakdownParts; window.lexisChunksInside = lexisChunksInside; window.lexisTermBreakdown = lexisTermBreakdown; window.lexisBreakdownUseful = lexisBreakdownUseful; window.LEXIS_QUICK_CORE = LEXIS_QUICK_CORE; window.LEXIS_QUICK_LEVELS = LEXIS_QUICK_LEVELS; window.LEXIS_QUICK_BANK = LEXIS_QUICK_BANK; window.LEXIS_PSEUDO = LEXIS_PSEUDO; window.lexisQuickRound = lexisQuickRound; window.lexisQuickTally = lexisQuickTally; window.lexisQuickEstimate = lexisQuickEstimate; window.lexisQuickFrontier = lexisQuickFrontier; window.lexisChunkSample = lexisChunkSample; window.lexisChunkTally = lexisChunkTally; window.lexisFmtRank = lexisFmtRank; window.lexisPoolPos = lexisPoolPos; window.lexisPhraseRank = lexisPhraseRank; window.lexisPhraseInfo = lexisPhraseInfo; window.lexisChunkKnown = lexisChunkKnown; window.lexisFindChunks = lexisFindChunks; window.LEXIS_VPAT = LEXIS_VPAT; window.LEXIS_VPAT_MAP = LEXIS_VPAT_MAP; window.LEXIS_VPAT_GAP = LEXIS_VPAT_GAP; window.lexisFindVPats = lexisFindVPats; window.lexisFindUnits = lexisFindUnits; window.lexisVPatInfo = lexisVPatInfo; window.lexisIsVPat = lexisIsVPat; window.lexisChunkWorthMarking = lexisChunkWorthMarking; window.lexisFoldFamilies = lexisFoldFamilies; window.lexisPhraseToks = lexisPhraseToks; window.lexisTokSame = lexisTokSame; window.lexisRankInfo = lexisRankInfo; window.lexisRankText = lexisRankText; window.lexisStemCommon = lexisStemCommon; window.lexisWorthWord = lexisWorthWord; window.LEXIS_IRREG = LEXIS_IRREG; window.lexisLemmaCandidates = lexisLemmaCandidates; window.LEXIS_RANK_BANDS = LEXIS_RANK_BANDS; window.LEXIS_RANK_BAND_CN = LEXIS_RANK_BAND_CN; window.LEXIS_RANK_BAND_EN = LEXIS_RANK_BAND_EN; window.lexisRankBandOf = lexisRankBandOf; window.LEXIS_FORM_OF = LEXIS_FORM_OF; window.lexisIsFormOf = lexisIsFormOf; window.lexisFormOfBase = lexisFormOfBase; window.lexisRankSenses = lexisRankSenses; window.lexisBestSense = lexisBestSense; window.lexisPosKey = lexisPosKey; window.lexisGlossGroups = lexisGlossGroups; window.lexisGlossParts = lexisGlossParts; window.lexisCleanGloss = lexisCleanGloss; window.lexisGlossLine = lexisGlossLine; window.lexisSnapZh = lexisSnapZh; window.lexisCapGloss = lexisCapGloss; window.lexisAlignZh = lexisAlignZh; window.lexisSentenceAt = lexisSentenceAt; window.lexisSafeHead = lexisSafeHead; window.lexisSnapLocate = lexisSnapLocate; window.lexisSnapSentence = lexisSnapSentence; window.lexisSnapRange = lexisSnapRange; }

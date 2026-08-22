@@ -1501,7 +1501,7 @@
     const need = window.lexisProduceTarget ? window.lexisProduceTarget(w) : 0;
     const done = window.lexisProduced ? window.lexisProduced(w) : 0;
     const produced = need < 2 || done >= need;
-    if ((s.interval || 0) >= 21 && produced) return { key: "mastered", cn: "Mastered" };
+    if ((s.interval || 0) >= 21 && produced) return { key: "mastered", cn: "Known" };
     if ((s.interval || 0) >= 21) return { key: "familiar", cn: `Familiar · produced  ${done}/${need}` };
     if ((s.lapses || 0) >= 4) return { key: "leech", cn: "Tricky" };
     if ((s.reps || 0) >= 3) return { key: "familiar", cn: "Familiar" };
@@ -2223,13 +2223,18 @@
   function vidPlayerH5(id) {
     if (!vidPlay || vidPlay.id !== id) return "";
     const q = `start=${vidPlay.from}&end=${vidPlay.to}&autoplay=1&rel=0&modestbranding=1&_=${vidPlay.n}`;
+    // pinned above the tab bar rather than pushing the list you are reading down
     return `<div class="vplayer"><iframe src="https://www.youtube.com/embed/${esc(id)}?${q}"
-        allow="autoplay" referrerpolicy="strict-origin-when-cross-origin"></iframe>
+        allow="autoplay; encrypted-media"></iframe>
       <div class="vplayer-x"><span>${fmtSecH5(vidPlay.from)} – ${fmtSecH5(vidPlay.to)}</span>
-        <button class="btn" id="vidStop">Close</button></div></div>`;
+        <button id="vidStop">✕</button></div></div>`;
   }
-  let vidFilter = "new";       // new | learning | mastered | all
-  let vidBand = "";            // "" | r1..r4 | r0 | ck — set by tapping the legend
+  // multi-select, and it starts on the two you are working with — same rule as
+  // the extension (see its note)
+  let vidStatus = new Set(["new", "learning"]);
+  let vidBands = new Set();
+  const vidStatusOn = (st) => vidStatus.has(st === "learning" || st === "mastered" ? st : "new");
+
   let vidSel = new Set();      // words ticked for the notebook
   const vidFull = {};          // id → the full record, fetched on demand, memory only
   const vidLoad = {};          // id → "loading" | "fail" — a spinner that never stops is a lie
@@ -2475,11 +2480,19 @@
   }
   const VID_BANDS = [
     { k: "r1", label: "Top 10k" }, { k: "r2", label: "10–15k" }, { k: "r3", label: "15–20k" },
-    { k: "r4", label: "20k+" }, { k: "r0", label: "unranked" }, { k: "ck", label: "Phrases" },
-    { k: "vp", label: "Verb patterns" },
+    { k: "r4", label: "20k+" }, { k: "r0", label: "unranked" },
+    { k: "ck", label: "Phrases & patterns" },
   ];
+  // one GROUP as well as one chip — a heading the legend cannot filter to is
+  // the same split under another name
+  const vidGrpKey = (w) => { const k = vidBandKey(w); return k === "vp" ? "ck" : k; };
   // a phrase is ranked among phrases, so it never gets filed under a word band —
   // and a verb pattern is on no frequency list at all
+  // one bucket for everything that is more than one word — see the extension
+  const vidBandIsH5 = (w, band) => {
+    const k = vidBandKey(w);
+    return band === "ck" ? (k === "ck" || k === "vp") : k === band;
+  };
   const vidBandKey = (w) => (w && w.p) ? "vp" : (w && w.c) ? "ck"
     : (!w || !w.r) ? "r0" : w.r <= 10000 ? "r1" : w.r <= 15000 ? "r2" : w.r <= 20000 ? "r3" : "r4";
 
@@ -2594,10 +2607,7 @@
     // counts describe the tab you are on, and All is an explicit way back —
     // clearing a filter by tapping the active chip again is not discoverable
     const scope = rows.filter((x) =>
-      vidFilter === "all" ? true
-      : vidFilter === "learning" ? x.st === "learning"
-      : vidFilter === "mastered" ? x.st === "mastered"
-      : x.st !== "learning" && x.st !== "mastered");
+      vidStatusOn(x.st));
     const counts = {};
     scope.forEach((x) => { const k = vidBandKey(x); counts[k] = (counts[k] || 0) + 1; });
     const nL = rows.filter((x) => x.st === "learning").length;
@@ -2606,19 +2616,21 @@
       n ? `<button class="vb ${key} clk${on ? " on" : ""}" data-vband="${key}"><i></i>${esc(label)} <b>${n}</b></button>`
         : `<span class="vb ${key} nil" title="none in this view"><i></i>${esc(label)} <b>0</b></span>`;
     const st = (key, label, n, tab) =>
-      n ? `<button class="vb ${key} clk${vidFilter === tab ? " on" : ""}" data-vf="${tab}"><i></i>${esc(label)} <b>${n}</b></button>`
+      n ? `<button class="vb ${key} clk${vidStatus.has(tab) ? " on" : ""}" data-vf="${tab}"><i></i>${esc(label)} <b>${n}</b></button>`
         : `<span class="vb ${key} nil" title="none in this episode"><i></i>${esc(label)} <b>0</b></span>`;
     return `<div class="vlegend">
-        <button class="vb all clk${vidBand ? "" : " on"}" data-vband="__all__" title="Every bucket — clears the band, not the filter above">All bands <b>${scope.length}</b></button>
-        ${sw("r1", "Top 10k", counts.r1 || 0, vidBand === "r1")}
-        ${sw("r2", "10–15k", counts.r2 || 0, vidBand === "r2")}
-        ${sw("r3", "15–20k", counts.r3 || 0, vidBand === "r3")}
-        ${sw("r4", "20k+", counts.r4 || 0, vidBand === "r4")}
-        ${sw("r0", "unranked", counts.r0 || 0, vidBand === "r0")}
-        ${sw("ck", "phrase", counts.ck || 0, vidBand === "ck")}
-        ${sw("vp", "pattern", counts.vp || 0, vidBand === "vp")}
-        ${st("nb", "learning", nL, "learning")}
-        ${st("mastered", "mastered", nM, "mastered")}
+        <button class="vb all clk${vidBands.size ? "" : " on"}" data-vband="__all__" title="Every bucket — clears the band, not the filter above">All bands <b>${scope.length}</b></button>
+        ${sw("r1", "Top 10k", counts.r1 || 0, vidBands.has("r1"))}
+        ${sw("r2", "10–15k", counts.r2 || 0, vidBands.has("r2"))}
+        ${sw("r3", "15–20k", counts.r3 || 0, vidBands.has("r3"))}
+        ${sw("r4", "20k+", counts.r4 || 0, vidBands.has("r4"))}
+        ${sw("r0", "unranked", counts.r0 || 0, vidBands.has("r0"))}
+        ${sw("ck", "phrases", (counts.ck || 0) + (counts.vp || 0), vidBands.has("ck"))}
+        ${/* the legend explains the MARKS, and only the transcript draws them —
+              see the extension's note */
+          vidTab === "script"
+            ? `${st("nb", "learning", nL, "learning")}${st("mastered", "known", nM, "mastered")}`
+            : ""}
         ${(() => {
           // The box has to show the number IN FORCE. settings.vocabLevel and
           // effLevel() are the same only once you have set a level by hand:
@@ -2635,10 +2647,8 @@
       </div>`;
   }
   function vidMarkOn(x) {
-    if (vidBand && vidBandKey(x) !== vidBand) return false;
-    if (vidFilter === "learning" && x.st !== "learning") return false;
-    if (vidFilter === "mastered" && x.st !== "mastered") return false;
-    if (vidFilter === "new" && (x.st === "learning" || x.st === "mastered")) return false;
+    if (vidBands.size && ![...vidBands].some((b) => vidBandIsH5(x, b))) return false;
+    if (!vidStatusOn(x.st)) return false;
     return true;
   }
   // Phrases and patterns are DERIVED at render, not read out of the snapshot —
@@ -2725,7 +2735,7 @@
       new: rows.filter((x) => x.st === "new"), learning: rows.filter((x) => x.st === "learning"),
       mastered: rows.filter((x) => x.st === "mastered"), all: rows,
     };
-    if (!by[vidFilter].length && by.all.length) vidFilter = "all";
+
     const head = `
       <div class="row" style="margin-bottom:10px">
         <button class="btn" id="vidBack">← Library</button>
@@ -2826,10 +2836,11 @@
     const zhSeen = {}, sentSeen = {};
     // re-cut a sentence a pre-fix snapshot stored as a fragment — see lexisSnapSentence
     const sentOfRow = (x) => {
-      const k = x.s + "\u0000" + x.at;
+      // the WORD is part of the answer — see the extension's note
+      const k = x.s + "\u0000" + x.at + "\u0000" + (x.w || "");
       if (sentSeen[k] !== undefined) return sentSeen[k];
       const out = (typeof window.lexisSnapSentence === "function")
-        ? window.lexisSnapSentence((full && full.lines) || [], x.s, x.at) : x.s;
+        ? window.lexisSnapSentence((full && full.lines) || [], x.s, x.at, x.w) : x.s;
       sentSeen[k] = out;
       return out;
     };
@@ -2841,21 +2852,21 @@
       zhSeen[k] = hit;
       return hit;
     };
-    const chip = (k, label, n) => `<button class="catf${vidFilter === k ? " on" : ""}" data-vf="${k}">${esc(label)} <b>${n}</b></button>`;
-    let list = by[vidFilter].slice().sort((a, b) =>
+    const chip = (k, label, n) => `<button class="catf${k === "__all__" ? (vidStatus.size === 3 ? " on" : "") : (vidStatus.has(k) ? " on" : "")}" data-vf="${k}">${esc(label)} <b>${n}</b></button>`;
+    let list = rows.filter((x) => vidStatusOn(x.st)).slice().sort((a, b) =>
       (a.p ? 2 : a.c ? 1 : 0) - (b.p ? 2 : b.c ? 1 : 0) || (a.r || 999999) - (b.r || 999999));
-    if (vidBand) list = list.filter((x) => vidBandKey(x) === vidBand);
+    if (vidBands.size) list = list.filter((x) => [...vidBands].some((b) => vidBandIsH5(x, b)));
     let out = "", lastBand = "";
     list.forEach((x) => {
-      const b = vidBandKey(x);
+      const b = vidGrpKey(x);
       if (b !== lastBand) {
         lastBand = b;
         const meta = VID_BANDS.find((z) => z.k === b);
         out += `<div class="vgrp"><i class="bsw ${b}"></i>${esc(meta ? meta.label : b)}
-                  <b>${list.filter((y) => vidBandKey(y) === b).length}</b></div>`;
+                  <b>${list.filter((y) => vidGrpKey(y) === b).length}</b></div>`;
       }
       const tag = x.st === "learning" ? `<span class="chip">learning</span>`
-                : x.st === "mastered" ? `<span class="chip">mastered</span>` : "";
+                : x.st === "mastered" ? `<span class="chip">known</span>` : "";
       out += `<label class="vrow${x.st === "new" ? "" : " done"}">
           <input type="checkbox" data-vpick="${esc(x.k)}" ${vidSel.has(x.k) ? "checked" : ""}/>
           <div>
@@ -2863,16 +2874,19 @@
               <span class="vr">${x.p ? "verb pattern" : x.c ? (x.r ? "phrase #" + x.r.toLocaleString("en-US") : "taught chunk") : (x.r ? "#" + x.r.toLocaleString("en-US") : "—")}</span>${tag}</div>
             ${x.p && x.cn ? `<div class="vcn">${esc(x.cn)}</div>` : ""}
             ${x.s ? (() => {
-              const id = vidEmbedIdH5(light.url || (full && full.url));
               const sx = sentOfRow(x), z = zhOf(sx, x.at);
-              return `<div class="vs">${id ? `<button class="vl-t vs-go" data-vplay="${Math.max(0, Math.floor(x.at || 0))}" title="Hear this line">▸</button> ` : ""}${esc(sx)}${z ? `<div class="vsz">${esc(z)}</div>` : ""}</div>`;
+              const id2 = vidEmbedIdH5(light.url || (full && full.url));
+              const rg2 = (typeof window.lexisSnapRange === "function")
+                ? window.lexisSnapRange((full && full.lines) || [], sx, x.at) : { from: Math.max(0, Math.floor(x.at || 0)) };
+              return `<div class="vs">${
+                id2 ? `<button class="vl-t vs-at" data-vplay="${rg2.from}" data-vsent="${esc(sx)}" title="Hear the original">▸ ${fmtSecH5(rg2.from)}</button> ` : ""}${esc(sx)}${z ? `<div class="vsz">${esc(z)}</div>` : ""}</div>`;
             })() : ""}
           </div>
         </label>`;
     });
     return head + `
       ${vidLegendH5(rows)}
-      <div class="catbar">${chip("new", "Not learned", by.new.length)}${chip("learning", "Learning", by.learning.length)}${chip("mastered", "Mastered", by.mastered.length)}${chip("all", "All", by.all.length)}</div>
+      <div class="catbar">${chip("new", "Not learned", by.new.length)}${chip("learning", "Learning", by.learning.length)}${chip("mastered", "Known", by.mastered.length)}${chip("__all__", "All", by.all.length)}</div>
       ${full ? "" : vidWaitNote(id, "the sentences")}
       <div>${out || "<p class='muted'>Nothing in this group.</p>"}</div>
       ${(() => {
@@ -2960,7 +2974,7 @@
         libFilter = c.dataset.lf; renderDiscover();
       }));
       view.querySelectorAll("[data-vid]").forEach((c) => c.addEventListener("click", () => {
-        vidOpen = c.dataset.vid; vidTab = "vocab"; vidFilter = "new"; vidSel.clear();
+        vidOpen = c.dataset.vid; vidTab = "vocab"; vidStatus = new Set(["new", "learning"]); vidBands.clear(); vidSel.clear();
         renderDiscover();
         // the sentences and the transcript live in the episode's own gist file
         loadVideoFull(vidOpen).then(() => { if (vidOpen) renderDiscover(); });
@@ -2976,19 +2990,38 @@
       ev.preventDefault(); ev.stopPropagation();
       go("notebook"); openLookupPane(); doLookup(el.dataset.vlook, "");
     }));
-    view.querySelectorAll("[data-vf]").forEach((b) => b.addEventListener("click", () => { vidFilter = b.dataset.vf; renderDiscover(); }));
+    view.querySelectorAll("[data-vf]").forEach((b) => b.addEventListener("click", () => {
+      const k = b.dataset.vf;
+      if (k === "__all__" || k === "all") vidStatus = new Set(["new", "learning", "mastered"]);
+      else {
+        if (vidStatus.has(k)) vidStatus.delete(k); else vidStatus.add(k);
+        // turning the last one off means "all of them", not an empty list
+        if (!vidStatus.size) vidStatus = new Set(["new", "learning", "mastered"]);
+      }
+      renderDiscover();
+    }));
     view.querySelectorAll("[data-vplay]").forEach((b) => b.addEventListener("click", (ev) => {
       ev.preventDefault(); ev.stopPropagation();          // the row is a <label> — don't tick it
       const f = vidFull[vidOpen], id = vidEmbedIdH5((videoIdx()[vidOpen] || {}).url || (f && f.url));
       if (!id) return;
-      const from = Math.max(0, parseInt(b.dataset.vplay, 10) || 0);
-      vidPlay = { id, from, to: vidLineEndH5(f, from), n: (vidPlay ? vidPlay.n : 0) + 1 };
+      const at = Math.max(0, parseInt(b.dataset.vplay, 10) || 0);
+      const sent = b.dataset.vsent || "";
+      // the time comes from the same locator that produced the sentence
+      const rg = (sent && typeof window.lexisSnapRange === "function")
+        ? window.lexisSnapRange((f && f.lines) || [], sent, at)
+        : { from: at, to: vidLineEndH5(f, at) };
+      vidPlay = { id, from: rg.from, to: rg.to, n: (vidPlay ? vidPlay.n : 0) + 1 };
       renderDiscover();
     }));
     const stopB = view.querySelector("#vidStop");
     if (stopB) stopB.addEventListener("click", () => { vidPlay = null; renderDiscover(); });
     view.querySelectorAll("[data-vband]").forEach((b) => b.addEventListener("click", () => {
-      vidBand = vidBand === b.dataset.vband ? "" : b.dataset.vband; renderDiscover();
+      const k = b.dataset.vband;
+      // "All bands" clears the selection, which IS every band; anything else toggles
+      if (k === "__all__") vidBands.clear();
+      else if (vidBands.has(k)) vidBands.delete(k);
+      else vidBands.add(k);
+      renderDiscover();
     }));
     const vl = $("#vLvl");
     if (vl) vl.addEventListener("change", (e) => {
@@ -3268,7 +3301,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.109.0 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.109.1 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
