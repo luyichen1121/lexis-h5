@@ -18,6 +18,7 @@
   p{color:#ddd;font:14px/1.6 system-ui;padding:16px}
   a{color:#fff}
 </style>
+<body>
 <script>
   (function () {
     var q = new URLSearchParams(location.search);
@@ -31,6 +32,6 @@
     f.src = src;
     f.allow = "autoplay; encrypted-media";
     f.setAttribute("allowfullscreen", "");
-    document.body.appendChild(f);
+    (document.body || document.documentElement).appendChild(f);
   })();
 </script>
