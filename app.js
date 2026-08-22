@@ -2887,7 +2887,7 @@
       out += `<label class="vrow${x.st === "mastered" ? " done" : ""}">
           <input type="checkbox" data-vpick="${esc(x.k)}" ${vidSel.has(x.k) ? "checked" : ""}/>
           <div>
-            <div><span class="serif" style="font-size:16px">${esc(x.w)}</span>${(x.forms || []).length ? `<span class="vr">also ${esc(x.forms.join(" / "))}</span>` : ""}
+            <div><span class="serif" style="font-size:16px">${esc(x.w)}</span>${x.p ? "" : `<button class="study-say" data-say="${esc(x.w)}" title="Pronounce">🔊</button>`}${(x.forms || []).length ? `<span class="vr">also ${esc(x.forms.join(" / "))}</span>` : ""}
               <span class="vr">${x.p ? "verb pattern" : x.c ? (x.r ? "phrase #" + x.r.toLocaleString("en-US") : "taught chunk") : (x.r ? "#" + x.r.toLocaleString("en-US") : "—")}</span>${tag}</div>
             ${x.p && x.cn ? `<div class="vcn">${esc(x.cn)}</div>` : ""}
             ${x.s ? (() => {
@@ -3016,6 +3016,13 @@
         if (!vidStatus.size) vidStatus = new Set(["new", "learning", "mastered"]);
       }
       renderDiscover();
+    }));
+    // the word on its own — the ▸ next to it plays the sentence as it was said,
+    // which is a different question. The row is a <label>, so a click here must
+    // not tick its checkbox.
+    view.querySelectorAll("[data-say]").forEach((b) => b.addEventListener("click", (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
+      speak(b.dataset.say, "");
     }));
     view.querySelectorAll("[data-vplay]").forEach((b) => b.addEventListener("click", (ev) => {
       ev.preventDefault(); ev.stopPropagation();          // the row is a <label> — don't tick it
@@ -3322,7 +3329,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.109.6 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.109.7 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {

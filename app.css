@@ -530,3 +530,5 @@ body.looking .nb-only{display:none}
 .study-say { border: none; background: none; padding: 0 2px; margin-left: 4px;
   font-size: 18px; line-height: 1; cursor: pointer; opacity: .85; }
 .study-say:active { opacity: 1; }
+
+.vrow .study-say{font-size:15px;margin-left:3px;vertical-align:middle}
