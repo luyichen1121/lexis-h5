@@ -40,6 +40,391 @@ var LEXIS_PHRASE_SCENE = {
   "get in touch": "comm", "catch up with": "comm", "clear the air": "comm", "see eye to eye": "comm", "build rapport": "comm", "break the silence": "comm",
   "weigh the odds": "risk", "take a chance": "risk", "hedge your bets": "risk", "brace for impact": "risk", "mitigate the risk": "risk", "tip the scales": "risk",
 };
+// ---------------------------------------------------------------------------
+// Verb patterns (colligation) — "conceal STH from SB"
+//
+// This is NOT a phrase in the sense the rest of this file means it. A phrase
+// ("call out", "break the ice") is a unit whose meaning you cannot derive from
+// its parts. A verb pattern is the opposite problem: you know exactly what
+// `conceal` means and you still cannot say it, because you do not know it takes
+// `from`. That gap is invisible to every mechanism we already have —
+// `conceal` is one word, so the word marker prices it and moves on, and
+// `lexisFindChunks` only matches CONTIGUOUS tokens, while the two halves of a
+// verb pattern are almost never adjacent:
+//
+//     concealing his cries from the ears of Cronus
+//               ^^^^^^^^^                          the object sits in between
+//
+// So it needs its own table and its own matcher, and — the part that matters
+// most — its own label. Filing it under `phrase` would make a phrase mark mean
+// two different things, and a mark that means two things answers neither.
+//
+// WHAT GOES IN THE TABLE. Only frames where the preposition is NOT predictable
+// from the meaning — the ones an advanced learner gets wrong. `wait for`,
+// `look at`, `pay for`, `belong to` are transparent: marking them is the
+// phrase-level version of colouring "the". `deprive sb OF`, `blame sth ON sb`,
+// `substitute A FOR B` are not, and they are the whole point.
+//
+// Rows: [verb (citation form), preposition, the pattern as a dictionary writes
+// it, the Chinese]. No example sentence on purpose — the example you want is the
+// one from the video or article you actually met it in, and that is what the
+// list already carries.
+// ---------------------------------------------------------------------------
+var LEXIS_VPAT = [
+  // ---- from -------------------------------------------------------------
+  ["prevent", "from", "prevent sb from doing sth", "阻止某人做某事"],
+  ["stop", "from", "stop sb from doing sth", "阻止某人做某事"],
+  ["keep", "from", "keep sb from doing sth", "使某人无法做某事"],
+  ["discourage", "from", "discourage sb from doing sth", "劝阻某人做某事"],
+  ["dissuade", "from", "dissuade sb from doing sth", "劝某人别做某事"],
+  ["deter", "from", "deter sb from doing sth", "威慑／劝阻某人做某事"],
+  ["prohibit", "from", "prohibit sb from doing sth", "禁止某人做某事"],
+  ["ban", "from", "ban sb from sth", "禁止某人参与某事"],
+  ["bar", "from", "bar sb from sth", "不准某人进入／参与"],
+  ["exclude", "from", "exclude sb from sth", "把某人排除在外"],
+  ["exempt", "from", "exempt sb from sth", "免除某人的某项义务"],
+  ["protect", "from", "protect sb from sth", "保护某人不受……伤害"],
+  ["shield", "from", "shield sb from sth", "使某人免受……"],
+  ["save", "from", "save sb from sth", "使某人免于……"],
+  ["conceal", "from", "conceal sth from sb", "对某人隐瞒某事"],
+  ["hide", "from", "hide sth from sb", "对某人隐瞒某事"],
+  ["withhold", "from", "withhold sth from sb", "对某人扣下／不告知某事"],
+  ["distinguish", "from", "distinguish A from B", "把 A 与 B 区分开"],
+  ["tell", "from", "tell A from B", "分辨 A 和 B"],
+  ["separate", "from", "separate A from B", "把 A 与 B 分开"],
+  ["borrow", "from", "borrow sth from sb", "向某人借某物"],
+  ["differ", "from", "differ from sth", "与……不同"],
+  ["refrain", "from", "refrain from doing sth", "忍住不做某事"],
+  ["abstain", "from", "abstain from sth", "戒除／弃权"],
+  ["suffer", "from", "suffer from sth", "受……之苦；患有……"],
+  ["benefit", "from", "benefit from sth", "从……中获益"],
+  ["profit", "from", "profit from sth", "从……中得利"],
+  ["derive", "from", "derive sth from sth", "从……中得到／源于"],
+  ["stem", "from", "stem from sth", "源自……"],
+  ["result", "from", "result from sth", "由……造成"],
+  ["arise", "from", "arise from sth", "由……产生"],
+  ["recover", "from", "recover from sth", "从……中恢复"],
+  ["escape", "from", "escape from sth", "从……中逃脱"],
+  ["emerge", "from", "emerge from sth", "从……中出现／走出"],
+  ["resign", "from", "resign from sth", "从……辞职"],
+  ["graduate", "from", "graduate from sth", "从……毕业"],
+  // ---- of ---------------------------------------------------------------
+  ["accuse", "of", "accuse sb of sth", "指控某人做了某事"],
+  ["suspect", "of", "suspect sb of sth", "怀疑某人做了某事"],
+  ["convict", "of", "convict sb of sth", "判某人某罪成立"],
+  ["acquit", "of", "acquit sb of sth", "宣判某人无罪"],
+  ["remind", "of", "remind sb of sth", "使某人想起某事"],
+  ["inform", "of", "inform sb of sth", "把某事通知某人"],
+  ["notify", "of", "notify sb of sth", "把某事通知某人"],
+  ["warn", "of", "warn sb of sth", "警告某人有某种危险"],
+  ["assure", "of", "assure sb of sth", "向某人保证某事"],
+  ["convince", "of", "convince sb of sth", "使某人确信某事"],
+  ["persuade", "of", "persuade sb of sth", "使某人相信某事"],
+  ["rob", "of", "rob sb of sth", "剥夺／抢走某人的某物"],
+  ["deprive", "of", "deprive sb of sth", "剥夺某人的某物"],
+  ["cure", "of", "cure sb of sth", "治好某人的某病"],
+  ["rid", "of", "rid sth of sth", "清除掉……"],
+  ["relieve", "of", "relieve sb of sth", "解除某人的（负担、职务）"],
+  ["consist", "of", "consist of sth", "由……构成"],
+  ["approve", "of", "approve of sth", "赞成某事"],
+  ["disapprove", "of", "disapprove of sth", "不赞成某事"],
+  ["dispose", "of", "dispose of sth", "处理掉某物"],
+  ["conceive", "of", "conceive of sth", "设想某事"],
+  ["boast", "of", "boast of sth", "吹嘘某事"],
+  ["complain", "of", "complain of sth", "诉说（病痛、不适）"],
+  ["beware", "of", "beware of sth", "谨防……"],
+  // ---- with -------------------------------------------------------------
+  ["provide", "with", "provide sb with sth", "向某人提供某物"],
+  ["supply", "with", "supply sb with sth", "向某人供应某物"],
+  ["present", "with", "present sb with sth", "把某物交给／呈给某人"],
+  ["equip", "with", "equip sb with sth", "为某人配备某物"],
+  ["entrust", "with", "entrust sb with sth", "把某事托付给某人"],
+  ["associate", "with", "associate A with B", "把 A 与 B 联系起来"],
+  ["compare", "with", "compare A with B", "把 A 与 B 相比"],
+  ["confuse", "with", "confuse A with B", "把 A 与 B 弄混"],
+  ["replace", "with", "replace A with B", "用 B 换掉 A"],
+  ["combine", "with", "combine A with B", "把 A 与 B 结合"],
+  ["connect", "with", "connect A with B", "把 A 与 B 联系起来"],
+  ["charge", "with", "charge sb with sth", "指控某人犯有某罪"],
+  ["credit", "with", "credit sb with sth", "把某事归功于某人"],
+  ["burden", "with", "burden sb with sth", "使某人背上……的负担"],
+  ["trust", "with", "trust sb with sth", "把某物放心交给某人"],
+  ["comply", "with", "comply with sth", "遵守（规定）"],
+  ["interfere", "with", "interfere with sth", "干扰／妨碍某事"],
+  ["sympathize", "with", "sympathize with sb", "同情／体谅某人"],
+  ["contend", "with", "contend with sth", "应付（难题）"],
+  ["dispense", "with", "dispense with sth", "省掉／不再需要某物"],
+  ["reconcile", "with", "reconcile A with B", "使 A 与 B 相协调"],
+  ["confront", "with", "confront sb with sth", "拿某事质问某人"],
+  ["acquaint", "with", "acquaint sb with sth", "使某人熟悉某事"],
+  // ---- to ---------------------------------------------------------------
+  ["attribute", "to", "attribute sth to sb/sth", "把某事归因于……"],
+  ["ascribe", "to", "ascribe sth to sb/sth", "把某事归于……"],
+  ["devote", "to", "devote sth to sth", "把（时间、精力）投入……"],
+  ["dedicate", "to", "dedicate sth to sth", "把……献给／专用于……"],
+  ["expose", "to", "expose sb to sth", "使某人接触／暴露于……"],
+  ["introduce", "to", "introduce sb to sth", "把某人引荐给／带入……"],
+  ["prefer", "to", "prefer A to B", "比起 B 更喜欢 A"],
+  ["adapt", "to", "adapt to sth", "适应……"],
+  ["adjust", "to", "adjust to sth", "适应……"],
+  ["object", "to", "object to sth", "反对某事"],
+  ["contribute", "to", "contribute to sth", "促成／有助于某事"],
+  ["resort", "to", "resort to sth", "诉诸／不得已采用……"],
+  ["subscribe", "to", "subscribe to sth", "赞同（观点）；订阅"],
+  ["testify", "to", "testify to sth", "证明／表明某事"],
+  ["confess", "to", "confess to sth", "承认（过错）"],
+  ["consent", "to", "consent to sth", "同意某事"],
+  ["owe", "to", "owe sth to sb", "把……归功于某人；欠某人……"],
+  ["entitle", "to", "entitle sb to sth", "使某人有权得到某物"],
+  ["treat", "to", "treat sb to sth", "请某人吃／享用……"],
+  ["attend", "to", "attend to sth", "处理／照料某事"],
+  ["cling", "to", "cling to sth", "紧抓不放；固守"],
+  ["yield", "to", "yield to sth", "屈从于……"],
+  ["submit", "to", "submit to sth", "服从／屈从于……"],
+  ["succumb", "to", "succumb to sth", "屈服于……；死于……"],
+  ["adhere", "to", "adhere to sth", "坚持遵守……"],
+  ["conform", "to", "conform to sth", "符合（标准）"],
+  ["allude", "to", "allude to sth", "间接提到某事"],
+  ["revert", "to", "revert to sth", "回复到……"],
+  ["restrict", "to", "restrict sth to sth", "把……限制在……"],
+  ["confine", "to", "confine sth to sth", "把……限于……"],
+  ["reduce", "to", "reduce sth to sth", "把……降为／沦为……"],
+  ["liken", "to", "liken A to B", "把 A 比作 B"],
+  // ---- for --------------------------------------------------------------
+  ["blame", "for", "blame sb for sth", "为某事责怪某人"],
+  ["criticize", "for", "criticize sb for sth", "因某事批评某人"],
+  ["praise", "for", "praise sb for sth", "因某事表扬某人"],
+  ["thank", "for", "thank sb for sth", "为某事感谢某人"],
+  ["punish", "for", "punish sb for sth", "因某事惩罚某人"],
+  ["forgive", "for", "forgive sb for sth", "原谅某人做的某事"],
+  ["compensate", "for", "compensate sb for sth", "补偿某人的某项损失"],
+  ["reward", "for", "reward sb for sth", "因某事奖赏某人"],
+  ["apologize", "for", "apologize to sb for sth", "为某事向某人道歉"],
+  ["account", "for", "account for sth", "解释／占（比例）"],
+  ["allow", "for", "allow for sth", "把……考虑在内"],
+  ["cater", "for", "cater for sb", "迎合／满足（需求）"],
+  ["long", "for", "long for sth", "渴望某物"],
+  ["yearn", "for", "yearn for sth", "渴望某物"],
+  ["opt", "for", "opt for sth", "选择某物"],
+  ["settle", "for", "settle for sth", "将就接受某物"],
+  ["substitute", "for", "substitute A for B", "用 A 代替 B"],
+  ["vouch", "for", "vouch for sb/sth", "为……担保"],
+  ["mistake", "for", "mistake A for B", "把 A 误认为 B"],
+  ["exchange", "for", "exchange A for B", "用 A 换 B"],
+  ["qualify", "for", "qualify for sth", "有资格获得某物"],
+  ["brace", "for", "brace for sth", "为（坏事）做好准备"],
+  ["atone", "for", "atone for sth", "弥补／赎（过错）"],
+  ["charge", "for", "charge sb for sth", "为某物向某人收费"],
+  ["reproach", "for", "reproach sb for sth", "因某事责备某人"],
+  ["commend", "for", "commend sb for sth", "因某事称赞某人"],
+  // ---- on / upon --------------------------------------------------------
+  ["base", "on", "base sth on sth", "把……建立在……之上"],
+  ["blame", "on", "blame sth on sb", "把某事怪到某人头上"],
+  ["impose", "on", "impose sth on sb", "把……强加给某人"],
+  ["inflict", "on", "inflict sth on sb", "把（痛苦）加于某人"],
+  ["spend", "on", "spend sth on sth", "把（钱、时间）花在……"],
+  ["concentrate", "on", "concentrate on sth", "专注于某事"],
+  ["insist", "on", "insist on sth", "坚持要求某事"],
+  ["rely", "on", "rely on sb/sth", "依靠……"],
+  ["depend", "on", "depend on sb/sth", "取决于／依靠……"],
+  ["count", "on", "count on sb", "指望某人"],
+  ["comment", "on", "comment on sth", "对某事发表评论"],
+  ["elaborate", "on", "elaborate on sth", "详细说明某事"],
+  ["dwell", "on", "dwell on sth", "老想着／纠缠于某事"],
+  ["embark", "on", "embark on sth", "着手／开始（一项事业）"],
+  ["congratulate", "on", "congratulate sb on sth", "为某事向某人道贺"],
+  ["compliment", "on", "compliment sb on sth", "因某事称赞某人"],
+  ["capitalize", "on", "capitalize on sth", "利用某事获利"],
+  ["prey", "on", "prey on sb", "捕食；欺凌"],
+  ["thrive", "on", "thrive on sth", "因……而茁壮／得意"],
+  ["hinge", "on", "hinge on sth", "取决于……"],
+  ["touch", "on", "touch on sth", "略微谈到某事"],
+  ["reflect", "on", "reflect on sth", "反思某事"],
+  ["expand", "on", "expand on sth", "进一步阐述某事"],
+  ["lavish", "on", "lavish sth on sb", "把……大量给予某人"],
+  ["descend", "on", "descend on sb", "突然造访／涌向"],
+  // ---- in ---------------------------------------------------------------
+  ["involve", "in", "involve sb in sth", "让某人参与某事"],
+  ["engage", "in", "engage in sth", "从事某事"],
+  ["participate", "in", "participate in sth", "参加某事"],
+  ["specialize", "in", "specialize in sth", "专攻某领域"],
+  ["succeed", "in", "succeed in doing sth", "成功做成某事"],
+  ["persist", "in", "persist in doing sth", "执意继续做某事"],
+  ["invest", "in", "invest in sth", "投资于某物"],
+  ["indulge", "in", "indulge in sth", "尽情享受某事"],
+  ["result", "in", "result in sth", "导致某结果"],
+  ["implicate", "in", "implicate sb in sth", "使某人牵连进某事"],
+  ["excel", "in", "excel in sth", "在某方面出色"],
+  ["confide", "in", "confide in sb", "向某人吐露心事"],
+  ["intervene", "in", "intervene in sth", "干预某事"],
+  ["delight", "in", "delight in sth", "以某事为乐"],
+  ["specialise", "in", "specialise in sth", "专攻某领域"],
+  // ---- into -------------------------------------------------------------
+  ["divide", "into", "divide sth into sth", "把……分成……"],
+  ["translate", "into", "translate sth into sth", "把……译成／转化为……"],
+  ["convert", "into", "convert sth into sth", "把……转换成……"],
+  ["transform", "into", "transform sth into sth", "把……变成……"],
+  ["talk", "into", "talk sb into doing sth", "说服某人做某事"],
+  ["trick", "into", "trick sb into doing sth", "骗某人做某事"],
+  ["deceive", "into", "deceive sb into doing sth", "骗某人做某事"],
+  ["force", "into", "force sb into sth", "迫使某人陷入／做某事"],
+  ["coerce", "into", "coerce sb into doing sth", "胁迫某人做某事"],
+  ["delve", "into", "delve into sth", "深入探究某事"],
+  ["tap", "into", "tap into sth", "发掘／利用某资源"],
+  ["incorporate", "into", "incorporate sth into sth", "把……并入……"],
+  ["plunge", "into", "plunge into sth", "一头扎进某事"],
+  ["lure", "into", "lure sb into sth", "引诱某人进入某事"],
+  // ---- against ----------------------------------------------------------
+  ["warn", "against", "warn sb against sth", "告诫某人提防某事"],
+  ["protect", "against", "protect sb against sth", "保护某人免受……"],
+  ["defend", "against", "defend sb against sth", "保护／为……辩护"],
+  ["discriminate", "against", "discriminate against sb", "歧视某人"],
+  ["guard", "against", "guard against sth", "防范某事"],
+  ["insure", "against", "insure against sth", "为……投保"],
+  ["advise", "against", "advise sb against sth", "劝某人别做某事"],
+  ["rebel", "against", "rebel against sth", "反抗某事"],
+  ["weigh", "against", "weigh A against B", "权衡 A 与 B"],
+  ["militate", "against", "militate against sth", "对……不利"],
+  // ---- as ---------------------------------------------------------------
+  ["regard", "as", "regard sb/sth as sth", "把……视为……"],
+  ["describe", "as", "describe sb/sth as sth", "把……描述为……"],
+  ["view", "as", "view sb/sth as sth", "把……看作……"],
+  ["treat", "as", "treat sb/sth as sth", "把……当作……"],
+  ["define", "as", "define sth as sth", "把……定义为……"],
+  ["classify", "as", "classify sth as sth", "把……归类为……"],
+  ["dismiss", "as", "dismiss sth as sth", "把……斥为……而不予理会"],
+  ["strike", "as", "strike sb as sth", "给某人……的印象"],
+  ["cite", "as", "cite sth as sth", "把……列举为……"],
+  ["hail", "as", "hail sb/sth as sth", "把……誉为……"],
+  ["portray", "as", "portray sb as sth", "把某人描绘成……"],
+  // ---- about ------------------------------------------------------------
+  ["warn", "about", "warn sb about sth", "提醒某人注意某事"],
+  ["inform", "about", "inform sb about sth", "把某事告知某人"],
+  ["boast", "about", "boast about sth", "吹嘘某事"],
+  ["quibble", "about", "quibble about sth", "就小事争辩"],
+  ["fuss", "about", "fuss about sth", "为小事大惊小怪"],
+  // ---- over -------------------------------------------------------------
+  ["preside", "over", "preside over sth", "主持／掌管某事"],
+  ["agonize", "over", "agonize over sth", "为某事苦恼不已"],
+  ["mull", "over", "mull over sth", "仔细考虑某事"],
+  ["pore", "over", "pore over sth", "仔细研读某物"],
+  ["gloss", "over", "gloss over sth", "掩饰／轻描淡写"],
+  ["prevail", "over", "prevail over sb", "战胜某人"],
+  ["quarrel", "over", "quarrel over sth", "为某事争吵"],
+  // ---- multi-word tails -------------------------------------------------
+  ["talk", "out of", "talk sb out of doing sth", "劝某人别做某事"],
+  ["cheat", "out of", "cheat sb out of sth", "骗走某人的某物"],
+  ["con", "out of", "con sb out of sth", "骗取某人的某物"],
+  ["grow", "out of", "grow out of sth", "因长大而不再……；源于……"],
+  ["distinguish", "between", "distinguish between A and B", "区分 A 和 B"],
+  ["differentiate", "between", "differentiate between A and B", "区分 A 和 B"],
+  ["mediate", "between", "mediate between A and B", "在 A 与 B 之间调解"],
+];
+var LEXIS_VPAT_MAP = null;      // citation pattern → row
+var _lexisVPatByVerb = null;    // verb → [row]
+function _lexisVPatBuild() {
+  if (_lexisVPatByVerb) return;
+  _lexisVPatByVerb = {}; LEXIS_VPAT_MAP = {};
+  LEXIS_VPAT.forEach(function (r) {
+    var row = { v: r[0], p: r[1], term: r[2], cn: r[3], ptoks: r[1].split(" ") };
+    // keyed lower-case: "distinguish A from B" is displayed with its slot
+    // letters, and every caller looks the term up folded
+    var k = row.term.toLowerCase();
+    if (LEXIS_VPAT_MAP[k]) return;                        // one row per pattern
+    LEXIS_VPAT_MAP[k] = row;
+    (_lexisVPatByVerb[row.v] = _lexisVPatByVerb[row.v] || []).push(row);
+  });
+}
+// A conjunction between the verb and the preposition means the preposition
+// belongs to a DIFFERENT clause: "he apologized, and everyone waited for the
+// bus" is not `apologize for`. Banning these costs a few real matches (a
+// relative clause inside the object) and buys back every false one — the right
+// trade, because a wrong mark teaches a wrong pattern.
+var LEXIS_VPAT_BREAK = {
+  and: 1, but: 1, or: 1, nor: 1, so: 1, yet: 1, because: 1, although: 1, though: 1,
+  while: 1, whilst: 1, when: 1, whenever: 1, where: 1, if: 1, unless: 1, until: 1,
+  that: 1, which: 1, who: 1, whom: 1, whose: 1, since: 1, as: 1, than: 1, then: 1,
+  after: 1, before: 1, however: 1, therefore: 1, whether: 1,
+};
+var LEXIS_VPAT_GAP = 5;         // words the object may take up before the preposition
+// A determiner immediately in front means the word is a NOUN here, not the verb:
+// "put out a WARNING about thieves" is not `warn sb about sth`, and the stemmer
+// cannot tell — it maps warning → warn either way. English almost never puts a
+// determiner directly before a finite verb, so this one look-behind is enough.
+var LEXIS_VPAT_DET = {
+  a: 1, an: 1, the: 1, this: 1, that: 1, these: 1, those: 1, my: 1, your: 1, his: 1,
+  her: 1, its: 1, our: 1, their: 1, any: 1, some: 1, no: 1, every: 1, each: 1,
+  another: 1, one: 1, "its'": 1,
+};
+// toks: one SENTENCE's word tokens, lowercased, in order.
+// → [{ i, j, plen, term, cn, v, p }] — i = the verb, j = the preposition.
+// Overlaps with curated chunks are NOT resolved here — call lexisFindUnits().
+function lexisFindVPats(toks) {
+  _lexisVPatBuild();
+  var taken = {};
+  var out = [], used = {};
+  for (var i = 0; i < toks.length; i++) {
+    if (taken[i]) continue;
+    if (i > 0 && LEXIS_VPAT_DET[toks[i - 1]]) continue;      // "a warning about" — noun
+    var cs = lexisCandSet(toks[i]), rows = null;
+    for (var c = 0; c < cs.length && !rows; c++) rows = _lexisVPatByVerb[cs[c]] || null;
+    if (!rows) continue;
+    var best = null;
+    for (var g = 0; g <= LEXIS_VPAT_GAP && !best; g++) {
+      var j = i + 1 + g;
+      if (j >= toks.length) break;
+      if (g > 0 && LEXIS_VPAT_BREAK[toks[j - 1]]) break;     // a clause ended here
+      for (var r = 0; r < rows.length; r++) {
+        var pt = rows[r].ptoks;
+        if (j + pt.length > toks.length || taken[j]) continue;
+        var ok = true;
+        for (var k = 0; k < pt.length && ok; k++) ok = toks[j + k] === pt[k];
+        // longest preposition wins: "talk sb out of it" is not `talk of`
+        if (ok && (!best || pt.length > best.plen)) best = { row: rows[r], j: j, plen: pt.length };
+      }
+    }
+    if (!best) continue;
+    if (used[best.row.term]) continue;      // one row per pattern per sentence
+    used[best.row.term] = 1;
+    out.push({ i: i, j: best.j, plen: best.plen, term: best.row.term,
+               cn: best.row.cn, v: best.row.v, p: best.row.p });
+    for (var t = 0; t < best.plen; t++) taken[best.j + t] = 1;
+    taken[i] = 1;
+  }
+  return out;
+}
+// The row behind a saved pattern, or null. This is what lets a verb pattern go
+// into the notebook with a real gloss and no dictionary call: no dictionary has
+// an entry for "conceal sth from sb", and asking one is how a correct item ends
+// up displayed as "not found".
+function lexisVPatInfo(term) {
+  _lexisVPatBuild();
+  return LEXIS_VPAT_MAP[String(term || "").toLowerCase().trim()] || null;
+}
+function lexisIsVPat(term) { return !!lexisVPatInfo(term); }
+// Chunks and verb patterns can claim the same words, and only one of them is
+// the thing worth showing. THE LONGER SPAN WINS, and a chunk wins a tie:
+//   "we rely on them"          → `rely on` the phrase (tie, 2 tokens each)
+//   "they talked her out of it" → `talk sb out of doing sth`, not the bare
+//                                 `out of`, which is transparent on its own
+// → { chunks, vpats } — disjoint, ready to render.
+function lexisFindUnits(toks) {
+  var chunks = (typeof lexisFindChunks === "function" ? lexisFindChunks(toks) : []) || [];
+  var vpats = lexisFindVPats(toks) || [];
+  var dropC = {}, keptV = [];
+  vpats.forEach(function (v) {
+    var lo = v.i, hi = v.j + v.plen - 1, span = hi - lo + 1, beaten = false, hits = [];
+    chunks.forEach(function (c, ci) {
+      if (c.i > hi || c.i + c.len - 1 < lo) return;
+      if (c.len >= span) beaten = true; else hits.push(ci);
+    });
+    if (beaten) return;
+    hits.forEach(function (ci) { dropC[ci] = 1; });
+    keptV.push(v);
+  });
+  return { chunks: chunks.filter(function (c, ci) { return !dropC[ci]; }), vpats: keptV };
+}
+
 // ---- Structural type of a multiword expression --------------------------
 // For the PHRASE List, a TOPICAL scene ("商业·职场") is meaningless — "have to",
 // "such as" and "go on" aren't about a subject. What actually helps the
@@ -52,11 +437,12 @@ var LEXIS_PHRASE_SCENE = {
 // Rules are checked in a fixed order and the FIRST match wins, so every term
 // lands in exactly one bucket — no item can appear under two labels.
 var LEXIS_KIND_CN = { word: "Words", pv: "Phrasal verbs", expr: "Fixed expressions" };
-var LEXIS_PTYPE_CN = { pv: "Phrasal verb", idiom: "Idiom",
+var LEXIS_PTYPE_CN = { pv: "Phrasal verb", idiom: "Idiom", vpat: "Verb pattern",
   aux: "Grammar frame", disc: "Discourse", prep: "Prepositional", collo: "Collocation",
 };
 var LEXIS_PTYPE_RULE = [
   ["idiom", "the whole thing is figurative — the parts don't add up to it (a hand-curated list decides)", "break the ice · beat around the bush"],
+  ["vpat", "you know the verb — what you don't know is the preposition it takes, and the object usually sits in between", "conceal sth FROM sb · deprive sb OF sth"],
   ["pv", "verb + particle, and the whole doesn't mean what the parts say", "pick up · keep up · come up with"],
   ["aux", "a grammar frame — a sentence pattern, not a vocabulary item", "have to · there is / are · going to"],
   ["disc", "a marker linking what comes before and after", "as well as · such as · rather than"],
@@ -77,6 +463,10 @@ function lexisPhraseType(term) {
   //    its entries are in the phrasal-verb pools, so this can safely win —
   //    without it "beat around the bush" gets filed as a phrasal verb.
   if (typeof LEXIS_IDIOM_SCENE !== "undefined" && LEXIS_IDIOM_SCENE[t]) return "idiom";
+  // 1b. a curated verb pattern. This must beat the particle scan below:
+  //     "conceal sth from sb" contains `from`, which IS a particle, so without
+  //     this the whole table would file itself under 短语动词.
+  if (typeof lexisVPatInfo === "function" && lexisVPatInfo(t)) return "vpat";
   // 2. verb + particle. The head must actually be a verb slot: "in touch with"
   //    starts with a preposition and is NOT a phrasal verb even though "with"
   //    is a particle.
@@ -829,10 +1219,10 @@ var LEXIS_SEED_FLAT = (function () {
 // cities, brands and web/file-format tokens look like ordinary vocabulary. They
 // are filtered out of LEXIS_FREQ below and reused by the notebook's "清理人名/
 // 地名/无意义词" action, so no surface ever recommends "usr" or "louisville".
-var LEXIS_PROPER_NOUNS = new Set("aaron aberdeen abraham acer acm adams adelaide adidas adobe adrian afghanistan africa alabama alan alaska albania albany albert alberta albuquerque alex alexander alexandria alexis alfred algeria ali alice allah allan allen alvin amanda amazon amber amd america american amsterdam amy anaheim anderson andorra andrea andreas andrew andrews andy angela angeles angola ann anna annapolis anne annie anthony antigua antonio aol apnic apollo apple april arabia argentina arizona arkansas arlington armenia armstrong arnold arthur aruba ashley asia asian asus athens atlanta auckland audi audrey aurora austin australia australian austria azerbaijan baghdad bahamas bahrain bailey baker bakersfield baltimore bangkok bangladesh barbados barbara barbie barcelona barry bath bbc beatles bedford beijing belarus belfast belgium belize bell ben benin benjamin bennett benz berkeley berlin bermuda bernard beth betty beverly bhutan bible bill billy birmingham bizrate black blair bloomberg bmw bob bobby boise bolivia bombay bosnia boston botswana boyd brad bradley brandon brazil brenda brian brighton brisbane bristol britain britannica british britney brooklyn brown bruce brunei brussels bryan bryant budapest buddha buffalo bulgaria burke burkina burlington burundi cadillac cairo calgary california calvin cambodia cambridge cameron cameroon campbell canada canadian canberra canon cardiff caribbean carl carlos carmen carol carolina caroline carolyn carroll carter casey casio catherine cbs chad chan chandler chapman charles charleston charlie charlotte chelsea cheryl chesapeake chevrolet chicago chile china chinese chris christ christian christianity christina christine christmas christopher chrysler cia cincinnati cindy cisco citibank citysearch claire clara clark clarke claude clayton cleveland clinton cnn cohen cole coleman colin collins cologne colombia colorado columbia columbus comoros compaq concord congo connecticut connie cook cooper copenhagen cornell cornwall craig crawford croatia cruz crystal cuba curtis cynthia cyprus czech dakota dale dallas dan dana daniel danny darren darwin dave david davidson davis dawn dayton dealtime dean deborah debra december del delaware delhi dell denmark dennis denver der derek detroit deutschland devon diana diane dick disney dixon djibouti dominic dominican don donald donna doris dorothy douglas dover doyle dubai dublin duncan durham dustin dwight dylan earl easter ebay ecuador ed eddie edgar edinburgh edmonton edward edwards edwin egypt eileen elaine eleanor elizabeth ellen elliott ellis emily eminem emma england epinions epson eric erica ericsson erik erin eritrea ernest espn essex estonia ethan ethiopia eugene europe european eva evans evelyn expedia facebook fairfield fbi fcc fda february fedex felix fernando ferrari fiji findarticles findlaw finland fiona firefox fisher fletcher flickr florida floyd ford foster france frances francis francisco frank frankfurt franklin fred freddie frederick fremont french fresno friday fujitsu gabon gabriel gail gambia gamecube gamespot garcia garland garmin gary gene geoffrey george georgia gerald german germany ghana gibraltar gibson gilbert glasgow glen glendale glenn gloria gmail gmc gomez gonzalez google gordon grace graham grant gray greece greek green greenland greensboro greg gregory grenada guam guatemala guinea guyana haiti halifax hall halloween hamburg hamilton hampton hans hansen harley harold harris harrison harry hartford harvard harvey hawaii hayes heather hector helen helena helsinki henderson henry herbert hewlett hill hilton hitachi holland holly honda honduras honolulu hopkins hotmail houston howard hp hudson hugh hughes hugo hungary hunter huntington hyundai ian ibm iceland icq idaho iii ikea illinois india indian indiana indianapolis indonesia intel invision iowa ipaq ipod iran iraq ireland irene irish irving isaac islam israel istanbul italian italy itunes ivan jack jackie jackson jacksonville jacob jakarta jake jamaica james jamie jane janet janice january japan japanese jason jay jean jeff jefferson jeffrey jelsoft jennifer jenny jeremy jerome jerry jersey jerusalem jesse jessica jesus jill jim jimmy joan joanne joe joel john johnny johnson johnston jon jonathan jones jordan jose joseph josh joshua joyce jr juan judith judy julia julian julie july june juneau justin jvc kansas karen karl kate katherine kathleen kathy katie kazakhstan keith kelkoo kelly ken kennedy kenneth kenny kentucky kenya kerry kevin kim kimberly king kingston kiribati kirk klein knight knowledgestorm kodak kong korea korean kristen kruger kurt kuwait kyle kyrgyzstan lancaster lance lanka laos laredo larry lars las latvia lauderdale laura lauren lawrence lebanon lee leeds lenovo leo leon leonard leone leslie lesotho lester lewis lexington lexmark lexus liberia libya liechtenstein lily lincoln linda linux lisa lisbon lithuania liverpool liz lloyd logan logitech lois london lonnie looksmart lopez lorenzo loretta lori los lou louis louise louisiana louisville lubbock lucas lucia lucy luis luke luther luxembourg lycos lynn mac macedonia macintosh macromedia madagascar madison madonna madrid maine malawi malaysia maldives mali malta manchester manhattan manila manitoba marc marco marcus margaret maria mariah marie marilyn mario marion mark marriott marshall martha martin marvin mary maryland mason massachusetts mastercard matt matthew maui maurice mauritius max maxwell mazda mc mcdonald medicaid medicare medline megan melbourne melissa melvin memphis mercedes mesa metallica mexican mexico meyer miami michael micheal michel michelle michigan microsoft mike milan miller milton milwaukee minneapolis minnesota minolta miriam mississippi missouri mitchell mitsubishi modesto moldova molly monaco monday mongolia monica monroe montana montenegro montgomery montreal morgan morocco morris morrison moscow moses motorola mozambique mozilla msn mtv mumbai munich murphy murray myanmar myers mysimon myspace nairobi namibia nancy naples nasa nascar nasdaq nashville nathan nathaniel nato nauru nba nbc ncaa nebraska nec neil nelson nepal netflix netherlands netscape nevada newark newcastle newfoundland newman nextel nfl nguyen nhl nhs niagara nicaragua nicholas nick nicolas nicole niger nigeria nike nikon nintendo nissan noah nokia norfolk norman norton norway norwegian notre nottingham november nsw nvidia nyc oakland oclc oconnor october oecd ohio oklahoma oliver olivia olympia olympic olympics olympus omaha oman ontario oracle oregon orlando orleans oscar oslo ottawa owen oxford packard pakistan palau palestine palmer pam pamela panama panasonic papua paraguay paris parker paso pat patricia patrick paul paula paypal pearl pearson pedro penn pennsylvania pentium pepsi perry perth peru pete peter petersburg peterson phil philadelphia philip philippines philips phillip phillips phoenix photoshop phyllis pierre pittsburgh playstation plymouth pokemon poland polish pontiac porsche porter portland portsmouth portugal powell prague preston pretoria price princeton prostores pubmed puerto qatar qld quebec queensland rachel raleigh ralph ramon randall randy raymond rebecca reed regina reid rene reno reuters reyes reynolds rhode rhonda rica ricardo rice richard richards richardson richmond rick ricky rita riverside robbie robert roberto roberts robertson robin robinson rochester rockford rodney rodriguez roger rogers roland romania rome ron ronald ronnie rosa rose ross roy ruby russell russia russian ruth rwanda ryan sacramento saint salem sally salvador sam samoa samsung samuel sanchez sandiego sandra santa sanyo sara sarah saskatchewan saturday saturn saudi savannah schmidt schneider scotland scott scottish scottsdale sean seattle sega senegal seoul september serbia seychelles shakespeare shakira shane shanghai shannon sharon sharp shaun shaw shawn sheffield sheila shelley sherman sherry shirley shopzilla shreveport shrewsbury sidney siemens simon simpson singapore skype slovakia slovenia smith smithsonian snyder somalia sony southampton spain spanish spencer spokane springfield sr sri stacy stan stanford stanley stella stephanie stephen steve steven stewart stockholm stockton stuart subaru sudan sue sullivan sunday suriname susan sussex suzuki swaziland sweden swedish switzerland sydney sylvia symantec syracuse syria tacoma tahoe taipei taiwan tajikistan tammy tampa tanya tanzania taylor techrepublic ted teddy tennessee teresa terry texas thailand theodore thinkpad thomas thompson thomson thursday tiffany tim timothy tina tobago toby todd togo tokyo toledo tom tommy tonga tony topeka toronto toshiba toyota tracy travis trenton treo trevor trinidad tripadvisor troy tucson tuesday tulsa tunisia turkey turkmenistan turner tuvalu twiki tyler uganda ukraine uruguay usa usda usgs usps utah uzbekistan valerie van vancouver vanessa vanuatu vatican vbulletin venezuela venice verde verizon vermont vernon veronica vicki victor victoria vienna vietnam vincent violet virginia visa volkswagen volvo von wagner wales walker wallace walmart walsh walter wanda ward warren warsaw washington watkins watson wayne weber wednesday wellington wendy wesley westminster white wichita william williams willie wilson winston wisconsin wong wood woods wordpress worldcat wright wto wyoming xbox xerox yahoo yamaha yemen york yorkshire young youtube yugoslavia yvonne zachary zambia zdnet zealand zimbabwe zurich".split(" "));
+var LEXIS_PROPER_NOUNS = new Set("aaron aberdeen abraham acer acm adam adams adelaide adidas adobe adrian afghanistan africa alabama alan alaska albania albany albert alberta albuquerque alex alexander alexandria alexis alfred algeria ali alice allah allan allen alvin amanda amazon amber amd america american amsterdam amy anaheim anderson andorra andrea andreas andrew andrews andy angela angeles angola ann anna annapolis anne annie anthony antigua antonio aol apnic apollo apple april arabia argentina arizona arkansas arlington armenia armstrong arnold arthur aruba ashley asia asian asus athens atlanta auckland audi audrey aurora austin australia australian austria azerbaijan baghdad bahamas bahrain bailey baker bakersfield baltimore bangkok bangladesh barbados barbara barbie barcelona barry bath bbc beatles bedford beijing belarus belfast belgium belize bell ben benin benjamin bennett benz berkeley berlin bermuda bernard beth betty beverly bhutan bible bill billy birmingham bizrate black blair blake bloomberg bmw bob bobby boise bolivia bombay bosnia boston botswana boyd brad bradford bradley brandon brazil brenda brian brighton brisbane bristol britain britannica british britney brooklyn brown bruce brunei brussels bryan bryant budapest buddha buffalo bulgaria burke burkina burlington burundi cadillac cairo calgary california calvin cambodia cambridge cameron cameroon campbell canada canadian canberra canon cardiff caribbean carl carlo carlos carmen carol carolina caroline carolyn carroll carter casey casio catherine cbs chad chan chandler chapman charles charleston charlie charlotte chelsea cheryl chesapeake chevrolet chicago chile china chinese chris christ christian christianity christina christine christmas christopher chrysler cia cincinnati cindy cisco citibank citysearch claire clara clark clarke claude clayton cleveland clinton cnn cohen cole coleman colin collins cologne colombia colorado columbia columbus comoros compaq concord congo connecticut connie cook cooper copenhagen cornell cornwall craig crawford croatia cruz crystal cuba curtis cynthia cyprus czech dakota dale dallas dan dana daniel danny darren darwin dave david davidson davis dawn dayton dealtime dean deborah debra december del delaware delhi dell denmark dennis denver der derek detroit deutschland devon diana diane dick disney dixon djibouti dominic dominican don donald donna doris dorothy doug douglas dover doyle dubai dublin duncan durham dustin dwight dylan earl easter ebay ecuador ed eddie edgar edinburgh edmonton edward edwards edwin egypt eileen elaine eleanor elizabeth ellen elliott ellis elvis emily eminem emma england epinions epson eric erica ericsson erik erin eritrea ernest espn essex estonia ethan ethiopia eugene europe european eva evans evelyn expedia facebook fairfield fbi fcc fda february fedex felix fernando ferrari fiji findarticles findlaw finland fiona firefox fisher fletcher flickr florida floyd ford foster france frances francis francisco frank frankfurt franklin fred freddie frederick fremont french fresno friday fujitsu gabon gabriel gail gambia gamecube gamespot garcia garland garmin gary gene geoffrey george georgia gerald german germany ghana gibraltar gibson gilbert glasgow glen glendale glenn gloria gmail gmc gomez gonzalez google gordon grace graham grant gray greece greek green greenland greensboro greg gregory grenada guam guatemala guinea guyana haiti halifax hall halloween hamburg hamilton hampton hans hansen harley harold harris harrison harry hartford harvard harvey hawaii hayes heather hector helen helena helsinki henderson henry herbert hewlett hill hilton hitachi holland holly honda honduras honolulu hopkins hotmail houston howard hp hudson hugh hughes hugo hungary hunter huntington hyundai ian ibm iceland icq idaho iii ikea illinois india indian indiana indianapolis indonesia intel invision iowa ipaq ipod iran iraq ireland irene irish irving isaac islam israel istanbul italian italy itunes ivan jack jackie jackson jacksonville jacob jakarta jake jamaica james jamie jane janet janice january japan japanese jason jay jean jeff jefferson jeffrey jelsoft jennifer jenny jeremy jerome jerry jersey jerusalem jesse jessica jesus jill jim jimmy joan joanne joe joel john johnny johnson johnston jon jonathan jones jordan jose joseph josh joshua joyce jr juan judith judy julia julian julie july june juneau justin jvc kansas karen karl kate katherine kathleen kathy katie kazakhstan keith kelkoo kelly ken kennedy kenneth kenny kent kentucky kenya kerry kevin kim kimberly king kingston kiribati kirk klein knight knowledgestorm kodak kong korea korean kristen kruger kurt kuwait kyle kyrgyzstan lancaster lance lanka laos laredo larry lars las latvia lauderdale laura lauren lawrence lebanon lee leeds lenovo leo leon leonard leone leslie lesotho lester lewis lexington lexmark lexus liberia libya liechtenstein lily lincoln linda lindsay linux lisa lisbon lithuania liverpool liz lloyd logan logitech lois london lonnie looksmart lopez lorenzo loretta lori los lou louis louise louisiana louisville lubbock lucas lucia lucy luis luke luther luxembourg lycos lynn mac macedonia macintosh macromedia madagascar madison madonna madrid maine malawi malaysia maldives mali malta manchester manhattan manila manitoba marc marco marcus margaret maria mariah marie marilyn mario marion mark marriott marshall martha martin marvin mary maryland mason massachusetts mastercard matt matthew maui maurice mauritius max maxwell mazda mc mcdonald medicaid medicare medline megan melbourne melissa melvin memphis mercedes mesa metallica mexican mexico meyer miami michael micheal michel michelle michigan microsoft mike milan miller milton milwaukee minneapolis minnesota minolta miriam mississippi missouri mitchell mitsubishi modesto moldova molly monaco monday mongolia monica monroe montana montenegro montgomery montreal morgan morocco morris morrison moscow moses motorola mozambique mozilla msn mtv mumbai munich murphy murray myanmar myers mysimon myspace nairobi namibia nancy naples nasa nascar nasdaq nashville nathan nathaniel nato nauru nba nbc ncaa nebraska nec neil nelson nepal netflix netherlands netscape nevada newark newcastle newfoundland newman nextel nfl nguyen nhl nhs niagara nicaragua nicholas nick nicolas nicole niger nigeria nike nikon nintendo nissan noah nokia norfolk norman norton norway norwegian notre nottingham november nsw nvidia nyc oakland oclc oconnor october oecd ohio oklahoma oliver olivia olympia olympic olympics olympus omaha oman ontario oracle oregon orlando orleans oscar oslo ottawa owen oxford packard pakistan palau palestine palmer pam pamela panama panasonic papua paraguay paris parker paso pat patricia patrick paul paula paypal pearl pearson pedro penn pennsylvania pentium pepsi perry perth peru pete peter petersburg peterson phil philadelphia philip philippines philips phillip phillips phoenix photoshop phyllis pierre pittsburgh playstation plymouth pokemon poland polish pontiac porsche porter portland portsmouth portugal powell prague preston pretoria price princeton prostores pubmed puerto qatar qld quebec queensland rachel raleigh ralph ramon randall randy raymond rebecca reed regina reid rene reno reuters reyes reynolds rhode rhonda rica ricardo rice richard richards richardson richmond rick ricky rita riverside robbie robert roberto roberts robertson robin robinson rochester rockford rodney rodriguez roger rogers roland romania rome ron ronald ronnie rosa rose ross roy ruby russell russia russian ruth rwanda ryan sacramento saint salem sally salvador sam samoa samsung samuel sanchez sandiego sandra santa sanyo sara sarah saskatchewan saturday saturn saudi savannah schmidt schneider scotland scott scottish scottsdale sean seattle sega senegal seoul september serbia seychelles shakespeare shakira shane shanghai shannon sharon sharp shaun shaw shawn sheffield sheila shelley sherman sherry shirley shopzilla shreveport shrewsbury sidney siemens simon simpson singapore skype slovakia slovenia smith smithsonian snyder somalia sony southampton spain spanish spencer spokane springfield sr sri stacy stan stanford stanley stella stephanie stephen steve steven stewart stockholm stockton stuart subaru sudan sue sullivan sunday suriname susan sussex suzuki swaziland sweden swedish switzerland sydney sylvia symantec syracuse syria tacoma tahoe taipei taiwan tajikistan tammy tampa tanya tanzania taylor techrepublic ted teddy tennessee teresa terry texas thailand theodore thinkpad thomas thompson thomson thursday tiffany tim timothy tina tobago toby todd togo tokyo toledo tom tommy tonga tony topeka toronto toshiba toyota tracy travis trenton treo trevor trinidad tripadvisor troy tucson tuesday tulsa tunisia turkey turkmenistan turner tuvalu twiki tyler uganda ukraine uruguay usa usda usgs usps utah uzbekistan valerie van vancouver vanessa vanuatu vatican vbulletin venezuela venice verde verizon vermont vernon veronica vicki victor victoria vienna vietnam vincent violet virginia visa volkswagen volvo von wagner wales walker wallace walmart walsh walt walter wanda ward warren warsaw washington watkins watson wayne weber wednesday wellington wendy wesley westminster white wichita william williams willie wilson winston wisconsin wong wood woods wordpress worldcat wright wto wyoming xbox xerox yahoo yamaha yemen york yorkshire young youtube yugoslavia yvonne zachary zambia zdnet zealand zimbabwe zurich".split(" "));
 // Web-corpus artefacts, file/format tokens, abbreviations and adult/spam terms —
 // not English vocabulary at all.
-var LEXIS_JUNK_WORDS = new Set("admin ajax alt am ambien ansi aol apache args argv asap ascii asin asp aspx atom aud avg avi awk bar bash baz bdsm bin blackjack bmp bool br bsd btw cad casino centos cfg cgi changelog char chmod chown cialis cnet commit config craigslist cron css cst curl cvs daemon debian dev div diy dll dns doc docx dom ebay ed eds edt emacs emoticons enum escort est etc eur exe faq faqs fedora fetish foo freebsd ftp func fyi gay gbp gif git gmt gnu goto gpl grep howto hr href htm html http https ibid idx ieee ietf imdb img init int ip ipsum isbn iso issn jpeg jpg jpy js jsonp jsp len lesbian li licence localhost lol lorem lottery manpage max mediawiki min mit mp mp3 mp4 mpeg msn mysql naked nav netbsd next nginx no nos nude ol omg openbsd opml params pdf pdt permalink phentermine php phpbb pingback pm png poker porn porno posix postgres pp ppt prev pst qux rar readme redhat regex repo rfc ringtone ringtones rmb root roulette rss rsschannel rsync scp screensaver screensavers sed sex sexy sitemap sku slots smilies smtp soap solaris soma span sqlite src ssh stderr stdin stdout str sudo sudoers sum svg svn tcp td temp th tmp toc todo tr trackback tramadol ubuntu uddi ul unicode unix upc uri url usd usr utc utf util utils valium var viagra vim vol w3c wallpaper wallpapers wav webcam webmaster wget wiki wikimedia wikipedia wsdl www xanax xhtml xls xlsx xml xmlrpc xpath xslt xxx zip zsh".split(" "));
+var LEXIS_JUNK_WORDS = new Set("adipex admin ajax alt am ambien ansi aol apache args argv asap ascii asin asp aspx atom aud avg avi awk bar bash baz bdsm bin blackjack bmp bool br bsd btw cad casino centos cfg cgi changelog char chmod chown cialis cnet commit config craigslist cron css cst curl cvs daemon debian dev div diy dll dns doc docx dom ebay ed eds edt emacs emoticons enum escort est etc eur exe faq faqs fedora fetish fioricet foo freebsd ftp func fyi gay gbp gif git gmt gnu goto gpl grep howto hr href htm html http https hydrocodone ibid idx ieee ietf imdb img init int ip ipsum isbn iso issn jpeg jpg jpy js jsonp jsp len lesbian levitra li licence localhost lol lorem lottery manpage max mediawiki min mit mp mp3 mp4 mpeg msn mysql naked nav netbsd next nginx no nos nude ol omg openbsd opml params paxil pdf pdt permalink phentermine php phpbb pingback pm png poker porn porno posix postgres pp ppt prev propecia prozac pst qux rar readme redhat regex repo rfc ringtone ringtones rmb root roulette rss rsschannel rsync scp screensaver screensavers sed sex sexy sitemap sku slots smilies smtp soap solaris soma span sqlite src ssh stderr stdin stdout str sudo sudoers sum svg svn tcp td temp th tmp toc todo tr trackback tramadol ubuntu uddi ul ultram unicode unix upc uri url usd usr utc utf util utils valium var viagra vim vol w3c wallpaper wallpapers wav webcam webmaster wget wiki wikimedia wikipedia wsdl www xanax xhtml xls xlsx xml xmlrpc xpath xslt xxx zip zoloft zsh".split(" "));
 // Abbreviations and initialisms. They pass every other filter (real letters, a
 // vowel, plausible length) but are not vocabulary anyone should study.
 var LEXIS_ABBREV = new Set("acct addr admin aka alt amet amt api approx apr apt args argv arr asap asin atm attr aud aug auth ave avg avi bal bcc bin bldg blvd bool cad cc ceo cfg cfo char cio cli cny config consectetur coo corp cpu cto dec demo dept dest dev dist diy dns dob doc dolor dpi enum env eod eom eoy eta etc eur excl ext false faq feb fl flac fri ft func fwd gbp gbps ghz gif govt gps gpu gui hdd hr hwy ide idx inc incl info init inr int intro ipsum isbn issn jan jpg jpy jul jun kbps kph krw kwh lan lb len lib lite llc lorem ltd mah mar max mbps mgmt mhz min misc mkv mms mom mon mp mpeg mph msg mt nan nb nite nov null num obj oct oz param pdf pic pics pin pkg pkwy placeholder plc pls plz png ppi ppm pps ppt pr prev ps psi qa qoq qty ram rd re ref repo req rmb rom rpm rsvp sat sdk sep sept seq sku sms spec sq src ssd ssn std ste str struct sun svg temp tho thru thu thur thurs thx til tmp toc true tue tues typedef ui undef univ unk unknown untitled upc uri url usb usd usr ux var vid vids void vpn vs wan wav wed xls yd yoy ytd".split(" "));
@@ -859,7 +1249,7 @@ var LEXIS_FREQ = (function () {
   }).filter(function (x) { return x.term && !lexisIsNoiseWord(x.term); });
 })();
 
-var LEXIS_COMMON = new Set("a about above account accounts achieve achieving across action activity actually add affect affecting after again against age ago air all allow allowing along also although always am among amount an ancient and another answer answers any anybody anyone anything anywhere app appear appearing approach approaches apps are area areas arm around art article articles artist arts as ask assist at attack attacking author authors avoid avoiding away baby back bad balance bank banking barely basic batch batches be became because become been before began begin beginning behind being believe believing below beside besides best better between beyond big black blue body book books both boy brand brands break breaking bring bringing brother budget build building built business businesses but buy buying by call came can capture captured capturing care career careers carry carrying case cases cash cause causing center certainly change changes changing child children choose choosing city class clearly client clients climate close closing clothes clothing code coding cold collection college color colour come coming community companies company compare comparing complete completing complex complicated computer computers concern concerns connect connecting consider considering consumer consumers contain containing continue continuing contrast control cook cooking corporate cost costs could countries country couple court create creating creation critical crucial cultural culture currently customer customers cut damage data daughter day days death decide deciding decision decrease defend defending degree degrees deliver demand demands depend depending describe describing design designer designs detail details develop developing development device devices did die difference differences different difficult digital director disease do doctor doctors does doing dollar done door down drink drop drug during each early earth easy eat eating economic economics economy education effect effects effort eight either empty enable enabling end ending energy engine engines english enough environment environmental equipment especially essential even event every everyone everything everywhere evidence example examples except exercise expand expanding expect experience experiment explain explaining eye fabric face fact facts fail failing failure fall falling families family far fashion father feedback feel felt few field fight fighting film films finally finance financial find fine finish first fitness five flight floor follow following food foot for force forget form forming found four free friend friends from full fund funds future gain gaining game games gave generally get getting girl give given giving global go goal goals going gone good got government great green ground group groups grow growing growth guy had half hand hands happen hard hardly hardware has have he head health healthy heart help helping her here herein hers high him his historical history hold holding home homes hospital hot hotel hour house houses how however hundred i idea if impact impacts importance important improve improvement improving in include including increase increases industries industry influence influences information inside instant interest international internet into invest investing investment investor involve involving is issue issues it its job jobs journey just keep keeping kept key kid kill kind kitchen knew know knowing knowledge known language languages large last late law laws lead leader leading learn learning least leave left legal less let letter letters level levels life light like line link linking list little live lives living local long look looking lose losing lot love low machine machines made main maintain maintaining major make making man manage managing manufacture many market marketing markets match material matter matters me meal meals mean meant measure measures medical medicine meet meeting meetings member members men merely method methods million mind mine minor minute mobile model models modern moment money month more moreover morning most mostly mother move movement movie movies moving much music my name nation national natural nature near nearly necessary need needing needle neither network networks never new news next nice night nights nine no nobody none nonetheless nor not nothing notice noticing now number numbers observe observing obtain obviously of off offer offering office offices official often old on once one online only onto open opening or organization other others our ours out outcome outcomes outfit outfits outside over own page pages paper papers parent part particularly parts party past patient patients pay payment people percent percentage performance person personal pick place places plan planning plans platform platforms play player players point points police policies policy political politics position possibly power powers present president pretty prevent preventing price prices pricing primary private probably problem problems process processes produce product production products profit profits program programs project projects propose protect protecting provide providing public purchase put quality quantity question questions quite rate rates ratio reach reaching read reading real realise realize realizing really reason receive receiving recently recommend record red reduce reducing regional regulation regulations regulator regulators relate relating relation relationship relationships rely remain remaining remarkable remarkably remember remembering reorder report reports require requiring research researcher respond response responsive restaurant result resulting results retail reveal reveals revenue right rigid rise rising road role room rule rules run running said sale sales same save saving saw say says school schools science scientific season seasons second secondary see seem seemed seeming seen select selecting sell selling send sending sense serve service set seven shape shaping she shop shopping short show showed showing shown side significance significant similar similarity simple simply since sister sit site six size sizes small so social society software solution solutions some somebody someone something sometimes somewhere son song songs soon sort sound sounds space speak spend spending sport sports stage stages stand star start starting state states stay staying step steps still stop stopping store stores stories story student students studies study stuff style styles succeed success successful such suggest suggesting supplies supply support supporting system systems table take taken taking talk tangible target targets task tasks tax teacher teachers team teams tech technologies technology tell ten text texts texture than that the their theirs them then theory there thereby therefore these they thing things think thinking third this those though thought thousand three through throughout time times to today told tomorrow too took tool tools top tour tourism toward towards town trade trading training travel traveling treatment trend trends trip trips true try turn turning two type under underneath understand understanding unless until unto up upon us use usually value values very view visit visiting voice wait walk wall want wanting war warm was watch watching water way ways we wear wearing weather website websites week weeks well went were what whatever when whenever where whereas wherein wherever whether which while white who whoever wholesale whom whose wife will win window winning with within without woman women word words work worker working world worlds worse would write writing written wrong year years yesterday you young your yours".split(" "));
+var LEXIS_COMMON = new Set("a about above account accounts achieve achieving across action activity actually add affect affecting after again against age ago air all allow allowing along also although always am among amount an ancient and another answer answers any anybody anyone anything anywhere app appear appearing approach approaches apps are area areas arm around art article articles artist arts as ask assist at attack attacking author authors avoid avoiding away baby back bad balance bank banking barely basic batch batches be became because become been before began begin beginning behind being believe believing below beside besides best better between beyond big black blue body book books both boy brand brands break breaking bring bringing brother budget build building built business businesses but buy buying by call came can cannot capture captured capturing care career careers carry carrying case cases cash cause causing center certainly change changes changing child children choose choosing city class clearly client clients climate close closing clothes clothing code coding cold collection college color colour come coming community companies company compare comparing complete completing complex complicated computer computers concern concerns connect connecting consider considering consumer consumers contain containing continue continuing contrast control cook cooking corporate cost costs could countries country couple court create creating creation critical crucial cultural culture currently customer customers cut damage data daughter day days death decide deciding decision decrease defend defending degree degrees deliver demand demands depend depending describe describing design designer designs detail details develop developing development device devices did die difference differences different difficult digital director disease do doctor doctors does doing dollar done door down drink drop drug during each early earth easy eat eating economic economics economy education effect effects effort eight either empty enable enabling end ending energy engine engines english enough environment environmental equipment especially essential even event every everyone everything everywhere evidence example examples except exercise expand expanding expect experience experiment explain explaining eye fabric face fact facts fail failing failure fall falling families family far fashion father feedback feel felt few field fight fighting film films finally finance financial find fine finish first fitness five flight floor follow following food foot for force forget form forming found four free friend friends from full fund funds future gain gaining game games gave generally get getting girl give given giving global go goal goals going gone good got government great green ground group groups grow growing growth guy had half hand hands happen hard hardly hardware has have he head health healthy heart help helping her here herein hers high him his historical history hold holding home homes hospital hot hotel hour house houses how however hundred i idea if impact impacts importance important improve improvement improving in include including increase increases industries industry influence influences information inside instant interest international internet into invest investing investment investor involve involving is issue issues it its job jobs journey just keep keeping kept key kid kill kind kitchen knew know knowing knowledge known language languages large last late law laws lead leader leading learn learning least leave left legal less let letter letters level levels life light like line link linking list little live lives living local long look looking lose losing lot love low machine machines made main maintain maintaining major make making man manage managing manufacture many market marketing markets match material matter matters me meal meals mean meant measure measures medical medicine meet meeting meetings member members men merely method methods million mind mine minor minute mobile model models modern moment money month more moreover morning most mostly mother move movement movie movies moving much music my name nation national natural nature near nearly necessary need needing needle neither network networks never new news next nice night nights nine no nobody none nonetheless nor not nothing notice noticing now number numbers observe observing obtain obviously of off offer offering office offices official often old on once one online only onto open opening or organization other others our ours out outcome outcomes outfit outfits outside over own page pages paper papers parent part particularly parts party past patient patients pay payment people percent percentage performance person personal pick place places plan planning plans platform platforms play player players point points police policies policy political politics position possibly power powers present president pretty prevent preventing price prices pricing primary private probably problem problems process processes produce product production products profit profits program programs project projects propose protect protecting provide providing public purchase put quality quantity question questions quite rate rates ratio reach reaching read reading real realise realize realizing really reason receive receiving recently recommend record red reduce reducing regional regulation regulations regulator regulators relate relating relation relationship relationships rely remain remaining remarkable remarkably remember remembering reorder report reports require requiring research researcher respond response responsive restaurant result resulting results retail reveal reveals revenue right rigid rise rising road role room rule rules run running said sale sales same save saving saw say says school schools science scientific season seasons second secondary see seem seemed seeming seen select selecting sell selling send sending sense serve service set seven shape shaping she shop shopping short show showed showing shown side significance significant similar similarity simple simply since sister sit site six size sizes small so social society software solution solutions some somebody someone something sometimes somewhere son song songs soon sort sound sounds space speak spend spending sport sports stage stages stand star start starting state states stay staying step steps still stop stopping store stores stories story student students studies study stuff style styles succeed success successful such suggest suggesting supplies supply support supporting system systems table take taken taking talk tangible target targets task tasks tax teacher teachers team teams tech technologies technology tell ten text texts texture than that the their theirs them then theory there thereby therefore these they thing things think thinking third this those though thought thousand three through throughout time times to today told tomorrow too took tool tools top tour tourism toward towards town trade trading training travel traveling treatment trend trends trip trips true try turn turning two type under underneath understand understanding unless until unto up upon us use usually value values very view visit visiting voice wait walk wall want wanting war warm was watch watching water way ways we wear wearing weather website websites week weeks well went were what whatever when whenever where whereas wherein wherever whether which while white who whoever wholesale whom whose wife will win window winning with within without woman women word words work worker working world worlds worse would write writing written wrong year years yesterday you young your yours".split(" "));
 
 var LEXIS_MORPH = { prefixes:[["counter","反/对"],["circum","环绕"],["contra","反对"],["trans","横跨/转变"],["inter","之间"],["super","超越/上"],["under","在下/不足"],["hyper","过度"],["multi","多"],["micro","微小"],["macro","大"],["retro","向后"],["extra","额外/超出"],["ultra","极度/超"],["fore","预先/前"],["over","过度/上"],["semi","半"],["anti","反对"],["auto","自己/自动"],["omni","全部"],["mono","单一"],["poly","多"],["post","之后"],["tele","远"],["para","旁/半"],["mis","错误/坏"],["dis","否定/分开"],["non","非"],["pre","之前"],["pro","向前/支持"],["sub","在下"],["com","共同"],["con","共同"],["col","共同"],["cor","共同"],["tri","三"],["uni","一"],["per","贯穿/彻底"],["epi","在上/在旁"],["syn","共同"],["sym","共同"],["dia","贯穿"],["ex","向外/前任"],["re","再次/向后"],["un","不/否定"],["in","不/向内"],["im","不/向内"],["il","不"],["ir","不"],["de","去除/向下/加强"],["en","使…"],["em","使…"],["bi","二"],["ab","离开"],["ad","朝向"],["be","使…"],["a","无/不"]], suffixes:[["ization","…化(名)"],["isation","…化(名)"],["ability","…能力(名)"],["ibility","…能力(名)"],["acious","充满…的(形)"],["icious","充满…的(形)"],["ation","行为/状态(名)"],["ition","行为/状态(名)"],["ement","结果(名)"],["ative","…性的(形)"],["itive","…性的(形)"],["logy","…学(名)"],["able","可…的(形)"],["ible","可…的(形)"],["tion","行为/状态(名)"],["sion","行为/状态(名)"],["ment","结果(名)"],["ness","状态/性质(名)"],["ance","状态(名)"],["ence","状态(名)"],["ious","充满…的(形)"],["eous","充满…的(形)"],["uous","充满…的(形)"],["ical","…的(形)"],["hood","状态(名)"],["ship","身份/状态(名)"],["ward","朝…方向"],["wise","在…方面"],["ize","使…(动)"],["ise","使…(动)"],["ify","使…(动)"],["ous","充满…的(形)"],["ive","…性的(形)"],["ial","…的(形)"],["ful","充满…的(形)"],["ist","…者(名)"],["ism","…主义(名)"],["ity","…性(名)"],["ent","…的/…者"],["ant","…的/…者"],["ary","…的/与…有关(形)"],["ory","…的(形)"],["ish","…的(形)"],["ate","使…/…的"],["age","行为/状态(名)"],["dom","领域/状态(名)"],["fy","使…(动)"],["al","…的(形)"],["ic","…的(形)"],["ly","…地(副)"],["er","…者/更…"],["or","…者"],["ee","被…者"],["ty","…性(名)"],["y","…的(形)"]], roots:{"act":["做", "action, react, activate"],"agr":["田地/农", "agriculture, agrarian"],"ann":["年", "annual, anniversary"],"enn":["年", "biennial, perennial"],"aqu":["水", "aquarium, aquatic"],"aud":["听", "audio, audience, auditory"],"bene":["好", "benefit, benevolent"],"bio":["生命", "biology, biography, antibiotic"],"brev":["短", "brief, abbreviate"],"cap":["拿/取", "capture, capable, capacity"],"capt":["拿/取", "captive, caption"],"cept":["拿/取", "accept, concept, intercept"],"ceive":["拿/取", "receive, perceive, conceive"],"ced":["行/让", "precede, recede"],"ceed":["行", "proceed, exceed, succeed"],"cess":["行/让", "access, process, recession"],"chron":["时间", "chronology, synchronize, chronic"],"cid":["切/杀/落", "decide, incident"],"cis":["切", "precise, scissors, concise"],"claim":["喊", "exclaim, proclaim, claim"],"clam":["喊", "clamor, proclamation"],"clud":["关闭", "include, exclude, conclude"],"clus":["关闭", "conclusion, exclusive, seclusion"],"cogn":["知道", "recognize, cognition"],"cord":["心", "cordial, accord, concord"],"corp":["身体", "corporate, corpse, corps"],"cred":["相信", "credit, credible, incredible"],"cur":["跑/流/关心", "current, occur, recur"],"curr":["跑/流", "current, curriculum"],"curs":["跑", "cursor, excursion, cursory"],"dem":["人民", "democracy, epidemic, demographic"],"dic":["说", "dedicate, indicate"],"dict":["说", "predict, dictate, verdict, contradict"],"doc":["教", "doctor, document, doctrine"],"duc":["引导", "educate, induce, produce"],"duct":["引导", "conduct, product, aqueduct"],"equ":["相等", "equal, equation, equator"],"fac":["做", "factory, facile, facilitate"],"fact":["做", "manufacture, benefactor, factor"],"fect":["做", "affect, perfect, infect"],"fic":["做", "fiction, efficient, sufficient"],"fer":["带来/搬运", "transfer, refer, prefer, offer"],"fid":["信任", "confide, fidelity, confident"],"fin":["结束/界限", "final, define, infinite"],"flect":["弯曲", "reflect, deflect"],"flex":["弯曲", "flexible, reflex"],"flu":["流", "fluent, influence, fluid"],"form":["形状", "reform, transform, uniform"],"fort":["强", "effort, fortify, comfort"],"fract":["破", "fracture, fraction"],"frag":["破", "fragment, fragile"],"gen":["产生/种类", "generate, genetic, genius"],"geo":["地球", "geography, geology, geometry"],"grad":["步/级", "gradual, graduate, upgrade"],"gress":["步/行", "progress, aggressive, regress"],"graph":["写/图", "photograph, biography, paragraph"],"gram":["写", "grammar, telegram, diagram"],"grat":["感激/愉快", "grateful, congratulate, gratitude"],"hydr":["水", "hydrant, dehydrate, hydrogen"],"ject":["投掷", "reject, project, inject, eject"],"jud":["判断", "judge, prejudice, judicial"],"junct":["连接", "junction, conjunction"],"lect":["选/读", "collect, elect, select"],"leg":["读/法", "legible, legal, legend"],"liber":["自由", "liberty, liberal, liberate"],"loc":["地方", "local, locate, dislocate"],"log":["词/学", "logic, dialogue, apology"],"loqu":["说", "eloquent, colloquial"],"luc":["光", "translucent, lucid"],"lum":["光", "illuminate, luminous"],"man":["手", "manual, manage, manuscript"],"manu":["手", "manufacture, manuscript"],"mar":["海", "marine, maritime, submarine"],"mater":["母", "maternal, material"],"matr":["母", "matrix, matriarch"],"med":["中间", "medium, mediate, medieval"],"memor":["记忆", "memory, memorial, memorable"],"ment":["心/想", "mental, comment, mention"],"meter":["测量", "meter, diameter, thermometer"],"metr":["测量", "metric, symmetry, geometry"],"migr":["迁移", "migrate, immigrant, emigrate"],"min":["小/突出", "minimum, diminish, minor"],"miss":["送", "mission, dismiss, submit"],"mit":["送", "submit, transmit, admit"],"mob":["动", "mobile, mobility"],"mot":["动", "motion, promote, emotion"],"mov":["动", "move, remove, movement"],"mort":["死", "mortal, immortal, mortgage"],"nat":["出生", "native, nation, natural"],"nov":["新", "novel, innovate, novice"],"nom":["名字/法则", "nominate, economy, autonomy"],"nym":["名字", "synonym, anonymous, antonym"],"oper":["工作", "operate, cooperate, opera"],"path":["感受/病", "sympathy, empathy, pathology"],"ped":["脚/儿童", "pedal, pedestrian, pedagogy"],"pod":["脚", "podium, tripod"],"pel":["推", "propel, expel, compel"],"puls":["推/跳动", "impulse, pulse, repulse"],"pend":["挂/悬", "depend, suspend, pending"],"pens":["挂/称/花费", "suspense, expensive, pension"],"phil":["爱", "philosophy, philanthropy"],"phon":["声音", "telephone, symphony, phonics"],"photo":["光", "photograph, photosynthesis"],"plic":["折叠", "complicate, duplicate, implicit"],"ply":["折叠", "apply, reply, imply"],"pon":["放置", "postpone, opponent, component"],"pos":["放置", "expose, compose, position"],"port":["携带", "import, export, transport"],"pot":["能力", "potent, potential, omnipotent"],"press":["压", "pressure, express, impress"],"prim":["第一", "primary, prime, primitive"],"quir":["寻求", "inquire, require, acquire"],"quis":["寻求", "acquisition, exquisite"],"quest":["寻求", "question, request, conquest"],"reg":["统治/规则", "regulate, region, regular"],"rect":["直/正", "correct, direct, rectify"],"rupt":["破裂", "erupt, corrupt, disrupt, bankrupt"],"scrib":["写", "describe, subscribe, scribble"],"script":["写", "manuscript, prescription, transcript"],"sect":["切", "section, dissect, insect"],"sens":["感觉", "sense, sensitive, sensation"],"sent":["感觉", "sentiment, consent, resent"],"sequ":["跟随", "sequence, consequent, subsequent"],"serv":["服务/保存", "serve, preserve, servant"],"sign":["标记", "signal, signature, significant"],"simil":["相似", "similar, simile, assimilate"],"sist":["站立", "assist, resist, consist"],"spec":["看", "species, specific, spectacle"],"spect":["看", "inspect, respect, spectator, prospect"],"spic":["看", "conspicuous, suspicious"],"spir":["呼吸", "inspire, spirit, respiration"],"sta":["站立", "stable, status, stationary"],"stat":["站立/状态", "status, statue, statistic"],"struct":["建造", "construct, structure, instruct"],"sum":["拿/总和", "assume, consume, summary"],"tact":["接触", "contact, tactile, intact"],"tang":["接触", "tangible, tangent"],"techn":["技艺", "technology, technique, technical"],"tele":["远", "telephone, television, telescope"],"tempor":["时间", "temporary, contemporary"],"ten":["持有", "tenant, tenacious, tenant"],"tain":["持有", "contain, retain, maintain"],"tent":["持有/伸展", "content, attention, tension"],"tend":["伸展", "extend, intend, tendency"],"tens":["伸展", "tension, intense, extensive"],"term":["界限/结束", "terminate, term, terminal"],"terr":["土地", "territory, terrain, terrace"],"test":["证明", "testify, protest, testimony"],"text":["编织", "texture, context, textile"],"therm":["热", "thermometer, thermal"],"tort":["扭曲", "distort, torture, contort"],"tract":["拉", "attract, extract, contract, distract"],"trib":["给予", "tribute, distribute, contribute"],"turb":["搅乱", "disturb, turbulent, perturb"],"vac":["空", "vacant, vacuum, evacuate"],"vad":["走", "invade, evade, pervade"],"vas":["走", "evasive, pervasive"],"val":["价值/强", "value, valid, evaluate"],"ven":["来", "convene, intervene, avenue"],"vent":["来", "prevent, invent, event"],"ver":["真实", "verify, verdict, veracity"],"verb":["词", "verbal, proverb, verbatim"],"vers":["转", "reverse, version, universe"],"vert":["转", "convert, divert, introvert"],"via":["路", "via, deviate, obvious"],"vid":["看", "video, evident, provide"],"vis":["看", "vision, visible, revise, supervise"],"vinc":["征服", "convince, invincible"],"vict":["征服", "victory, convict, evict"],"viv":["生命", "survive, revive, vivid"],"vit":["生命", "vital, vitamin, vitality"],"voc":["叫/声音", "vocal, advocate, vocation"],"vok":["叫", "invoke, provoke, revoke"],"vol":["意愿", "voluntary, volition, benevolent"],"volv":["滚/转", "involve, revolve, evolve"],"volu":["滚/转", "volume, revolution"],"sci":["知道", "science, conscious, conscience"],"soci":["社会/同伴", "social, associate, society"],"sol":["单独/太阳", "solo, solitude, solar"],"solv":["解开", "solve, dissolve, resolve"],"solu":["解开", "solution, soluble, absolute"],"son":["声音", "sonic, resonate, sonata"],"morph":["形态", "morphology, amorphous, metamorphosis"],"circ":["圆/环", "circle, circular, circuit"],"civ":["公民", "civil, civilian, civic"],"clar":["清楚", "clarify, clear, declare"],"commun":["共同", "community, communicate, common"],"counter":["反对", "counter, encounter, counteract"],"dur":["持久/硬", "durable, endure, duration"],"luct":["挣扎/斗争", "reluctant, ineluctable"],"gran":["谷粒/种子", "grain, granular, granule"],"dorm":["睡", "dormant, dormitory"],"magn":["大/宏大", "magnify, magnificent, magnitude"],"clin":["倾斜", "incline, decline, recline"],"cline":["倾斜", "recline, decline"],"plaud":["鼓掌/赞同", "applaud, plaudit"],"plaus":["鼓掌/赞同", "plausible, applause"],"nounc":["宣告", "announce, pronounce, denounce"],"nunci":["宣告", "enunciate, annunciation"],"sacr":["神圣", "sacred, sacrifice"],"sanct":["神圣", "sanctuary, sanctify, sanction"],"spond":["承诺/回应", "respond, correspond"],"spons":["承诺/回应", "response, sponsor, responsible"],"strict":["拉紧", "strict, restrict, constrict"],"string":["拉紧", "stringent, astringent"],"vor":["吞食", "carnivore, voracious, devour"],"fus":["倒/流", "confuse, infuse, transfusion"],"fund":["倒/基础", "refund, fundamental, profound"],"found":["倒/基础", "foundation, profound, founder"],"grav":["重", "gravity, grave, aggravate"],"lev":["举/轻", "elevate, lever, alleviate"],"gest":["携带/带来", "gesture, digest, suggest"],"her":["粘附", "adhere, coherent, inherent"],"hes":["粘附", "adhesive, cohesion, hesitate"],"cad":["落", "cadence, cascade"],"cas":["落/机遇", "occasion, casual"],"don":["给", "donate, pardon, donor"],"noc":["伤害", "innocent, innocuous"],"nox":["伤害", "noxious, obnoxious"],"plac":["取悦/平静", "placid, placate, complacent"],"ambul":["走", "ambulance, amble, ambulatory"],"greg":["群", "gregarious, aggregate, segregate"],"later":["边", "lateral, bilateral, unilateral"],"urb":["城市", "urban, suburb, urbane"],"vag":["漫游", "vague, vagrant, extravagant"],"vig":["活力/警觉", "vigor, vigilant, invigorate"],"dol":["悲/痛", "condole, doleful, indolent"],"secut":["跟随", "consecutive, persecute, execute"],"hib":["拥有/持", "inhibit, prohibit, exhibit"],"hab":["拥有/持", "habit, inhabit, rehabilitate"],"cede":["行/让步", "concede, cede"],"lig":["捆绑/选", "oblige, ligament, eligible"],"nect":["连接", "connect, annex"],"pass":["感受/通过", "passion, compassion, passage"],"pati":["忍受", "patient, compatible"],"flict":["打击", "conflict, inflict, afflict"],"gnos":["知道", "diagnosis, prognosis, agnostic"],"jur":["法/发誓", "jury, perjure, conjure"],"just":["公正/法", "justice, adjust, justify"],"lud":["玩/戏", "allude, illusion, prelude"],"lus":["玩/戏", "illusion, elude, collusion"],"ephemer":["朝生暮死/短暂", "ephemeral, ephemera"],"anthrop":["人类", "anthropology, misanthrope, philanthropy"],"chrom":["颜色", "chromatic, monochrome"],"cosm":["宇宙/秩序", "cosmos, cosmopolitan, microcosm"],"dox":["观点/正统", "orthodox, paradox"],"heli":["太阳", "helium, heliocentric"],"hetero":["不同", "heterogeneous, heterodox"],"homo":["相同", "homogeneous, homonym"],"phag":["吃", "esophagus, bacteriophage"],"phob":["恐惧", "phobia, claustrophobia"],"psych":["心灵/精神", "psychology, psyche, psychiatry"],"soph":["智慧", "philosophy, sophisticated, sophomore"],"theo":["神", "theology, atheist, theocracy"],"zo":["动物", "zoology, protozoa"]} };
 
@@ -2808,9 +3198,9 @@ function lexisChunkTally(prev, items, markedSet) {
 
 // what each Discover tab actually is, in one line
 var LEXIS_TAB_WHAT = {
-  words: "Single words.",
-  pv: "<b>Verb + particle</b>, where the whole doesn't mean what the parts say (pick up / keep up / go through). The hardest class to use correctly on purpose, so it gets its own tab — with the share of real occurrences each sense covers.",
-  expr: "Everything else you have to memorise <b>whole</b>: collocations, prepositional phrases, discourse markers and idioms. No phrasal verbs here — they are all in the previous tab, never repeated.",
+  words: "",
+  pv: "<b>Verb + particle</b>, where the whole doesn't mean what the parts say (pick up / keep up). Each sense shows the share of real uses it covers.",
+  expr: "Everything else you memorise <b>whole</b>: collocations, prepositional phrases, discourse markers, idioms. Phrasal verbs live in the previous tab, never repeated here.",
 };
 
 
@@ -2852,7 +3242,23 @@ function lexisDataScore(d) {
 // other. Nothing that exists on either side is ever dropped.
 function lexisMergeData(a, b) {
   a = a || {}; b = b || {};
-  var better = lexisDataScore(a) >= lexisDataScore(b) ? a : b;
+  // WHICH PIPELINE PRODUCED IT OUTRANKS HOW MUCH OF IT THERE IS.
+  //
+  // `lexisDataScore` measures volume, and a better look-up is often SHORTER —
+  // the Collins gloss that replaced the 英汉 index block is one line where the
+  // old one was eight. So the old copy scored higher, won, and carried its own
+  // `schema` across with it: pressing Update re-fetched everything, the next
+  // sync pulled the pre-update copies back, and the "still on an older look-up"
+  // count went UP instead of down. It could never converge.
+  //
+  // A device that has not upgraded must not overwrite the upgraded result, so a
+  // strictly newer schema decides the winner and volume only breaks the tie
+  // between equals. The per-field "keep whichever side has more" rules below
+  // still run, so nothing is lost by volume either.
+  var sa = Number(a.schema || 0), sb = Number(b.schema || 0);
+  var better = sa !== sb
+    ? (sa > sb ? a : b)
+    : (lexisDataScore(a) >= lexisDataScore(b) ? a : b);
   var other = better === a ? b : a;
   var out = {};
   var k;
@@ -2868,6 +3274,14 @@ function lexisMergeData(a, b) {
   ["cn", "phonetic", "audioUs", "audioUk", "audio", "contextMeaning", "freq"].forEach(function (f) {
     if (!better[f] && other[f]) out[f] = other[f];
   });
+  // Frequency is not all-or-nothing: only one side can compute a word-family
+  // rank (the 392KB table ships with the extension, not with the phone), so a
+  // freq object that HAS famRank beats one that merely exists. Without this the
+  // "fill only empty slots" rule above would keep the phone's rankless copy and
+  // the rank would be lost on every round trip.
+  if (other.freq && other.freq.famRank && !(out.freq && out.freq.famRank)) {
+    out.freq = Object.assign({}, out.freq || {}, { famRank: other.freq.famRank, famBand: other.freq.famBand });
+  }
   // the breakdown of a term no dictionary lists — union it, so a part glossed on
   // one device isn't dropped because the other copy scored higher overall
   if (a.partGlosses || b.partGlosses) {
@@ -2877,6 +3291,8 @@ function lexisMergeData(a, b) {
     });
     if (Object.keys(pg).length) out.partGlosses = pg;
   }
+  // never let a merge report an older pipeline than the data it actually holds
+  if (sa || sb) out.schema = Math.max(sa, sb);
   // 我的例句 is hand-written and irreplaceable — union, never a pick
   var mine = [], seenEx = {};
   (a.userExamples || []).concat(b.userExamples || []).forEach(function (e) {
@@ -3245,11 +3661,164 @@ function lexisFindChunks(toks) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// One family, one row.
+//
+// "insulting" and "insult" are the same word family — they carry the SAME
+// family rank, which is why both rows read #6,073. Listing them separately asks
+// you to learn one thing twice, and it inflates every count on the page.
+//
+// The fold key is the family rank itself: a rank is a position in a list of
+// families, so two different families can never share one. That makes this
+// exact rather than a guess — no stemming decisions, no false merges. Words
+// with no rank keep their own row (we can't prove anything about them) and
+// phrases are never folded into a word.
+//
+// The surviving headword is the shortest form (the base, near enough:
+// insult < insulting, breakthrough < breakthroughs); the forms actually heard
+// are kept on `forms`, and the row keeps the EARLIEST sighting, so the sentence
+// is still the first place the episode used it.
+// ---------------------------------------------------------------------------
+function lexisFoldFamilies(rows) {
+  var out = [], byRank = {};
+  (rows || []).forEach(function (r) {
+    var isChunk = r.kind === "chunk" || r.c === 1;
+    if (isChunk || !r.rank) { out.push(r); return; }
+    var k = "r" + r.rank;
+    var prev = byRank[k];
+    if (!prev) {
+      byRank[k] = r;
+      r.forms = [];
+      out.push(r);
+      return;
+    }
+    // keep the shorter headword, and keep the earlier sentence
+    var keep = prev, drop = r;
+    if (r.term.length < prev.term.length || (r.term.length === prev.term.length && r.term < prev.term)) {
+      keep = r; drop = prev;
+      r.forms = prev.forms || [];
+      byRank[k] = r;
+      out[out.indexOf(prev)] = r;
+    }
+    if ((drop.start || 0) < (keep.start || 0) || !keep.sentence) {
+      keep.sentence = drop.sentence; keep.start = drop.start; keep.at = drop.at;
+    }
+    keep.forms = keep.forms || [];
+    if (drop.term !== keep.term && keep.forms.indexOf(drop.term) === -1) keep.forms.push(drop.term);
+    // a form you are already learning speaks for the family
+    if (drop.cls === "nb" || drop.st === "learning") { keep.cls = keep.cls || "nb"; keep.st = keep.st === "mastered" ? "mastered" : "learning"; }
+    if (drop.cls === "mastered" || drop.st === "mastered") { keep.cls = "mastered"; keep.st = "mastered"; }
+  });
+  return out;
+}
+
+// A chunk the screen should actually mark. `have to` / `used to` / `going to`
+// are AUXILIARY FRAMES — grammar, not vocabulary — and the app already teaches
+// them in their own category. Underlining them is the phrase-level version of
+// colouring "the" and "of": it fills the page with marks that answer nothing.
+// This is the only structural exclusion; anything rarer stays, because past this
+// point the honest separator is frequency and there is no calibrated phrase
+// level to compare against yet.
+function lexisChunkWorthMarking(term) {
+  try { return lexisPhraseType(term) !== "aux"; } catch (e) { return true; }
+}
+
+// ---------------------------------------------------------------------------
+// Your level, and what a saved snapshot is allowed to forget
+//
+// Marking asks "is this word above my level RIGHT NOW". A recorded episode used
+// to ask the SAME question once, at record time, and drop every word that
+// failed — so lowering your level afterwards could not bring them back: they
+// were never written down. Hence two numbers. Record down to a floor, well
+// below any level you would plausibly set, and decide what to SHOW at render
+// time — then the knob is retroactive for everything already in your library.
+var LEXIS_RECORD_FLOOR = 3000;
+function lexisRecordLevel(level) {
+  var l = Number(level) || 0;
+  return l > 0 ? Math.min(l, LEXIS_RECORD_FLOOR) : LEXIS_RECORD_FLOOR;
+}
+// The rows of a snapshot worth showing at this level. Phrases and verb patterns
+// are ranked on a different list from word families, so a word-family level says
+// nothing about them and they always survive; an unpriced word (r0) was never
+// priced at all, so it is not quietly reclassified as "you know this" either.
+function lexisSnapWords(rows, level) {
+  var l = Number(level) || 0;
+  if (!l) return (rows || []).slice();
+  return (rows || []).filter(function (w) {
+    if (!w) return false;
+    if (w.c || w.p || w.kind === "chunk" || w.kind === "vpat") return true;
+    var r = w.r || w.rank;
+    return !r || r > l;
+  });
+}
+// A page's title is not always the page's title. YouTube prepends an unread
+// count to document.title — "(1) The Origins of Greek Mythology … - YouTube" —
+// so an episode recorded while a notification was pending gets saved under a
+// name with a "(1)" glued to the front, and it looks for all the world like the
+// app appended a counter to avoid a duplicate. It did not: a re-save replaces
+// the record, keyed by id. The badge is just leaking in.
+//
+// Only a LEADING count is stripped, and only when real text follows it — a
+// title that is genuinely "(1) Introduction" keeps its number, and one that is
+// only "(1)" is left alone rather than emptied.
+function lexisCleanTitle(t, site) {
+  var s = String(t || "").replace(/\s+/g, " ").trim();
+  if (!s) return "";
+  // Suffix FIRST. The other order eats the whole string on "(1) - YouTube": the
+  // badge strip leaves "- YouTube", which then looks exactly like a bare suffix
+  // and goes too. A card with no name at all is worse than one with a strange
+  // name, so nothing here is ever allowed to return empty for a non-empty input.
+  if (site) s = s.replace(new RegExp("\\s*[-\u2013|]\\s*" + site + "\\s*$", "i"), "").trim() || s;
+  var was, next;
+  do {
+    was = s;
+    next = s.replace(/^\(\d{1,4}\)\s+(?=\S)/, "")
+             .replace(/^[\u25CF\u2022]\s+(?=\S)/, "")
+             .trim();
+    if (next) s = next;                  // never strip the last thing left
+  } while (s !== was && next);
+  return s.trim();
+}
+
+// The level a snapshot was recorded at, so a page can say why an easy word is
+// missing. Prefer what the recorder stamped; fall back to the commonest word it
+// actually kept, but only with enough rows for that to be evidence rather than
+// an accident of a short clip.
+function lexisSnapFloor(v) {
+  if (!v) return 0;
+  if (v.lvl) return Number(v.lvl) || 0;
+  var ws = (v.words || []).filter(function (w) {
+    if (!w || !(w.r || w.rank)) return false;
+    if (w.c || w.p || w.kind === "chunk" || w.kind === "vpat") return false;
+    // A MULTI-WORD term is a phrase whether or not the row carries the flag, and
+    // its rank is a position among phrases — "not only" is #908 on a list of
+    // 5,400 expressions, not the 908th commonest word family. Trusting the flag
+    // alone was enough: snapshots recorded before chunk-snapshotting existed
+    // (the reason vidDerivedUnits has to re-derive them at all) carry phrase
+    // rows with no flag, so one #908 dragged the inferred floor down to 907 and
+    // silenced the note — on exactly the files that most needed it, the old
+    // ones. The result was a list with nothing in Top 10k and no explanation.
+    return !/\s/.test(String(w.w || w.term || ""));
+  });
+  if (ws.length < 20) return 0;
+  var min = Infinity;
+  ws.forEach(function (w) { var r = w.r || w.rank; if (r < min) min = r; });
+  return min === Infinity ? 0 : min - 1;
+}
+
 // → { text, title } ready to render next to the band chip, or null when we
 // genuinely don't know. Never invents a number.
 function lexisRankInfo(term, freq) {
   var t = String(term || "").trim().toLowerCase();
   if (!t) return null;
+  // A VERB PATTERN is on no frequency list and never was — reporting it as
+  // "not on the phrase lists" reads as a gap in our data about a real phrase,
+  // when in fact it is not a phrase and there is no list it could be missing
+  // from. Say what it is instead.
+  if (typeof lexisVPatInfo === "function" && lexisVPatInfo(t)) {
+    return { text: "verb pattern",
+             title: "A verb and the preposition it takes. Not on any frequency list — patterns aren't ranked." };
+  }
   var multi = /\s/.test(t);
   // The word-family rank wins over every estimate: it is exact (a position in a
   // real ranked list, not a number derived from Zipf's law) and it is folded
@@ -3421,10 +3990,16 @@ function lexisLemmaCandidates(w) {
   lw = lw.replace(/n't$/, "").replace(/'(ll|re|ve|d|m|s)$/, "");
   var out = [lw];
   if (LEXIS_IRREG[lw]) out.push(LEXIS_IRREG[lw]);
+  // The irregular map applies to the SURFACE form only, never to a stem we just
+  // produced. Chaining the two hops means "wounded" → stem "wound" → irregular
+  // "wind", and the same for every common word whose regular stem happens to be
+  // another verb's irregular past: founded→find, grounded→grind, thoughts→think,
+  // bits→bite, lays→lie. Measured over the whole 44,796-head table, dropping the
+  // second hop changes only these (and nonsense double-inflections like
+  // "takened"), and changes every one of them in the right direction.
   var st = (typeof lexisStemCandidates === "function") ? (lexisStemCandidates(lw) || []) : [];
   for (var i = 0; i < st.length; i++) {
     if (out.indexOf(st[i]) === -1) out.push(st[i]);
-    if (LEXIS_IRREG[st[i]] && out.indexOf(LEXIS_IRREG[st[i]]) === -1) out.push(LEXIS_IRREG[st[i]]);
   }
   return out;
 }
@@ -3456,4 +4031,431 @@ function lexisRankBandOf(rank) {
   return "r4";
 }
 
-if (typeof window !== "undefined") { window.LEXIS_SEED = LEXIS_SEED; window.LEXIS_SEED_FLAT = LEXIS_SEED_FLAT; window.LEXIS_FREQ = LEXIS_FREQ; window.LEXIS_COMMON = LEXIS_COMMON; window.LEXIS_MORPH = LEXIS_MORPH; window.lexisAnalyzeMorph = lexisAnalyzeMorph; window.lexisWordDomain = lexisWordDomain; window.LEXIS_SCENE_CN = LEXIS_SCENE_CN; window.lexisIdiomScene = lexisIdiomScene; window.LEXIS_PHRASE_SEED = LEXIS_PHRASE_SEED; window.LEXIS_PHRASE_SEED_FLAT = LEXIS_PHRASE_SEED_FLAT; window.lexisPhraseScene = lexisPhraseScene; window.lexisSingularize = lexisSingularize; window.LEXIS_PASSAGES = LEXIS_PASSAGES; window.LEXIS_BAND_SIZE = LEXIS_BAND_SIZE; window.LEXIS_BAND_SEQ = LEXIS_BAND_SEQ; window.LEXIS_BAND_LABEL = LEXIS_BAND_LABEL; window.lexisWordBand = lexisWordBand; window.lexisPassageTokens = lexisPassageTokens; window.lexisEstimateFromReading = lexisEstimateFromReading; window.LEXIS_PROPER_NOUNS = LEXIS_PROPER_NOUNS; window.LEXIS_JUNK_WORDS = LEXIS_JUNK_WORDS; window.lexisIsNoiseWord = lexisIsNoiseWord; window.LEXIS_ABBREV = LEXIS_ABBREV; window.lexisStemCandidates = lexisStemCandidates; window.LEXIS_PHRASE_LIST = LEXIS_PHRASE_LIST; window.LEXIS_PHRASE_EXAMPLE = LEXIS_PHRASE_EXAMPLE; window.LEXIS_PTYPE_CN = LEXIS_PTYPE_CN; window.LEXIS_KIND_CN = LEXIS_KIND_CN; window.LEXIS_PTYPE_RULE = LEXIS_PTYPE_RULE; window.lexisKindOf = lexisKindOf; window.lexisDataScore = lexisDataScore; window.lexisMergeData = lexisMergeData; window.lexisMergeWordPair = lexisMergeWordPair; window.lexisMergeNotebooks = lexisMergeNotebooks; window.lexisDedupeWords = lexisDedupeWords; window.lexisTombKeys = lexisTombKeys; window.lexisTombAt = lexisTombAt; window.lexisPhraseType = lexisPhraseType; window.LEXIS_PHAVE_LIST = LEXIS_PHAVE_LIST; window.LEXIS_PHAVE_MAP = LEXIS_PHAVE_MAP; window.LEXIS_DRILL_CN = LEXIS_DRILL_CN; window.LEXIS_DRILL_EN = LEXIS_DRILL_EN; window.lexisHashText = lexisHashText; window.lexisSentenceQuality = lexisSentenceQuality; window.lexisClozeSplit = lexisClozeSplit; window.lexisWordSentences = lexisWordSentences; window.lexisSenseFor = lexisSenseFor; window.lexisProduced = lexisProduced; window.lexisProduceTarget = lexisProduceTarget; window.lexisBuildDrill = lexisBuildDrill; window.lexisMarkDrill = lexisMarkDrill; window.LEXIS_STR_MAX = LEXIS_STR_MAX; window.LEXIS_DRILL_RUNG = LEXIS_DRILL_RUNG; window.lexisDrillRung = lexisDrillRung; window.lexisDrillScores = lexisDrillScores; window.lexisStrengthOf = lexisStrengthOf; window.lexisEditDistance = lexisEditDistance; window.lexisNormAns = lexisNormAns; window.lexisCheckAnswer = lexisCheckAnswer; window.lexisGradeFor = lexisGradeFor; window.LEXIS_SLOW_MS = LEXIS_SLOW_MS; window.lexisSchedule = lexisSchedule; window.lexisVideoRef = lexisVideoRef; window.lexisFmtAt = lexisFmtAt; window.LEXIS_FREQ_SUPP = LEXIS_FREQ_SUPP; window.LEXIS_PV_ALL = LEXIS_PV_ALL; window.LEXIS_EXPR_ALL = LEXIS_EXPR_ALL; window.LEXIS_IDIOM_SET = LEXIS_IDIOM_SET; window.LEXIS_TAB_WHAT = LEXIS_TAB_WHAT; window.lexisChunksWith = lexisChunksWith; window.lexisCleanChunk = lexisCleanChunk; window.LEXIS_COMPOUND_TAIL = LEXIS_COMPOUND_TAIL; window.lexisCompoundGloss = lexisCompoundGloss; window.lexisBreakdownParts = lexisBreakdownParts; window.lexisChunksInside = lexisChunksInside; window.lexisTermBreakdown = lexisTermBreakdown; window.lexisBreakdownUseful = lexisBreakdownUseful; window.LEXIS_QUICK_CORE = LEXIS_QUICK_CORE; window.LEXIS_QUICK_LEVELS = LEXIS_QUICK_LEVELS; window.LEXIS_QUICK_BANK = LEXIS_QUICK_BANK; window.LEXIS_PSEUDO = LEXIS_PSEUDO; window.lexisQuickRound = lexisQuickRound; window.lexisQuickTally = lexisQuickTally; window.lexisQuickEstimate = lexisQuickEstimate; window.lexisQuickFrontier = lexisQuickFrontier; window.lexisChunkSample = lexisChunkSample; window.lexisChunkTally = lexisChunkTally; window.lexisFmtRank = lexisFmtRank; window.lexisPoolPos = lexisPoolPos; window.lexisPhraseRank = lexisPhraseRank; window.lexisPhraseInfo = lexisPhraseInfo; window.lexisChunkKnown = lexisChunkKnown; window.lexisFindChunks = lexisFindChunks; window.lexisPhraseToks = lexisPhraseToks; window.lexisTokSame = lexisTokSame; window.lexisRankInfo = lexisRankInfo; window.lexisRankText = lexisRankText; window.lexisStemCommon = lexisStemCommon; window.lexisWorthWord = lexisWorthWord; window.LEXIS_IRREG = LEXIS_IRREG; window.lexisLemmaCandidates = lexisLemmaCandidates; window.LEXIS_RANK_BANDS = LEXIS_RANK_BANDS; window.LEXIS_RANK_BAND_CN = LEXIS_RANK_BAND_CN; window.LEXIS_RANK_BAND_EN = LEXIS_RANK_BAND_EN; window.lexisRankBandOf = lexisRankBandOf; }
+
+// ---------------------------------------------------------------------------
+// Which sense to show
+//
+// dictionaryapi.dev and Wiktionary return senses grouped by part of speech in
+// THEIR order, and that order is neither frequency nor usefulness. Reading
+// meanings[0].definitions[0] therefore prints, verbatim:
+//     exquisite → "Fop, dandy."                     (a NOUN sense — the adjective group has 6)
+//     recurring → "To have recourse (to) someone…"  (archaic verb — it is an adjective here)
+//     devised   → "simple past and past participle of devise"   (not a definition at all)
+// Three different-looking wrong glosses, one cause.
+//
+// The fix works at the GROUP level only. Measured over real entries, reordering
+// senses INSIDE a group did more harm than good — it moved `swaddling` to
+// "To beat; cudgel" and `vessel` to the blood one — because a dictionary's
+// within-group order is roughly sensible even when its group order is not.
+// ---------------------------------------------------------------------------
+
+// "simple past and past participle of devise" is a pointer, not a meaning.
+// Deliberately narrow: it must START with a grammatical label. A bare trailing
+// "… of X" is NOT enough — real definitions end that way constantly ("a
+// continued look of attention", "avoidance of extremes"), and treating those as
+// stubs is how one wrong gloss becomes ten.
+var LEXIS_FORM_OF = /^\s*(\([^)]*\)\s*)?(simple past\b|simple present\b|past tense\b|present tense\b|past participle\b|present participle\b|third-person\b|second-person\b|first-person\b|plural\b|singular\b|genitive\b|comparative\b|superlative\b|gerund\b|inflection\b|conjugation\b|misspelling\b|initialism\b|abbreviation\b|acronym\b|contraction\b|(alternative|obsolete|archaic|dated|nonstandard|standard|eye[- ]dialect|informal|rare|british|american)\s+(form|spelling|letter-case form)\b)/i;
+function lexisIsFormOf(def) {
+  var d = String(def || "").trim();
+  if (!d || d.length > 110) return false;          // a paragraph is a definition
+  return LEXIS_FORM_OF.test(d) && /\bof\b/i.test(d);
+}
+// The word a stub points at, so a look-up can follow it instead of giving up.
+function lexisFormOfBase(def) {
+  var m = String(def || "").match(/\bof\s+([a-z][a-z'’-]*)\s*\.?\s*$/i);
+  if (!m) return "";
+  return m[1].toLowerCase().replace(/['’]s$/, "");
+}
+// Senses reordered so the first one is the one to show. Same array, same shape —
+// nothing is dropped, so a caller that renders all of them still renders all of
+// them, just with the useful group on top and the pointers at the bottom.
+function lexisRankSenses(list, term) {
+  var arr = (list || []).filter(function (m) { return m && m.definition; });
+  if (arr.length < 2) return arr.slice();
+  // An -ing/-ed form that the dictionary gives its OWN adjective entry to IS
+  // that adjective on the page you met it on; the verb senses filed under it
+  // belong to the lemma. "a recurring theme" is not "to have recourse to".
+  //
+  // TWO adjective senses, not one, and the threshold was measured rather than
+  // picked: over 53 real entries, preferring a ONE-sense adjective group turned
+  // `unfolded` into "Not folded." and `gathered` into "achieving a state of
+  // shared mysticism" — a lone adjective sense is usually a bare negation of the
+  // verb, while a group of two or more is the participle in its own right
+  // (recurring, tired, excited, missing, outstanding, endowed).
+  var participle = /(ing|ed)$/.test(String(term || "").toLowerCase());
+  var order = [], by = {};
+  arr.forEach(function (m, i) {
+    var k = "p:" + String(m.pos || "").toLowerCase();
+    if (!by[k]) { by[k] = { key: k, items: [], real: [], first: i }; order.push(by[k]); }
+    by[k].items.push(m);
+    if (!lexisIsFormOf(m.definition)) by[k].real.push(m);
+  });
+  order.forEach(function (g) {
+    g.score = Math.min(g.real.length, 6);          // the pos with the most real senses is the word's job
+    if (!g.real.length) g.score -= 20;             // a group of nothing but "past tense of X"
+    if (participle && /^p:adj/.test(g.key) && g.real.length >= 2) g.score += 10;
+    // A token that shows up as -ing/-ed in running prose is a participle: a verb
+    // or an adjective, not a noun. The dictionary's noun entry for it is a
+    // DERIVED noun ("concealing" → "an act of concealment") and is almost never
+    // the one you met — but it can carry more senses than the verb and win on
+    // count alone, which is exactly how `concealing his cries` got glossed
+    // 一种隐瞒行为.
+    if (participle && /^p:noun/.test(g.key)) g.score -= 4;
+  });
+  order.sort(function (a, b) { return (b.score - a.score) || (a.first - b.first); });
+  var out = [];
+  order.forEach(function (g) { g.real.forEach(function (m) { out.push(m); }); });
+  order.forEach(function (g) {
+    g.items.forEach(function (m) { if (out.indexOf(m) < 0) out.push(m); });
+  });
+  return out;
+}
+function lexisBestSense(list, term) { return lexisRankSenses(list, term)[0] || null; }
+
+// ── A gloss is a gloss, not the dictionary's index entry ─────────────────────
+//
+// Youdao returns 英汉 as one line PER PART OF SPEECH, and `data.cn` is those
+// lines joined with "；". Everywhere the app has room for exactly ONE line of
+// Chinese — a notebook card, an episode's word list, the back of a review card
+// — that join is what you read, and three separate things are wrong with it:
+//
+//   seethe → "vi. 沸腾；冒泡；激动；vt. 使浸透；使煮沸；n. 沸腾；感情等的迸发"
+//   embody → "v. 具体表现，体现；…；【名】（Embody）（英）恩博迪（人名）"
+//
+//   ① the "；" erases the part-of-speech boundary, so eight senses across three
+//      parts of speech read as one flat list — and the first thing you read
+//      ("沸腾") is the sense you did NOT meet in "they seethed with vengeance",
+//      while the card directly above it claims one pos ("verb").
+//   ② Youdao files transliterated SURNAMES as a 【名】 sense. "恩博迪" is not a
+//      meaning of `embody` in any sentence anyone will ever read.
+//   ③ the register markers that say a sense is archaic or legal (<古>, <法律>)
+//      are written in angle brackets, so a tag-stripper ate them and an archaic
+//      sense arrived looking current. That one can only be fixed where the
+//      entry is FETCHED — see fetchYoudao — since the marker is already gone
+//      from everything on disk.
+//
+// ① and ② are fixed on the STORED string rather than only on a fresh fetch:
+// notebooks are full of the joined form and nothing re-queries a settled entry.
+var LEXIS_POS_ALIAS = {
+  v: "v", vi: "v", vt: "v", vb: "v", vbl: "v", verb: "v", aux: "v", auxiliary: "v", modal: "v",
+  n: "n", noun: "n", pl: "n", nn: "n",
+  adj: "adj", a: "adj", adjective: "adj",
+  adv: "adv", ad: "adv", adverb: "adv",
+  prep: "prep", preposition: "prep",
+  conj: "conj", conjunction: "conj",
+  pron: "pron", pronoun: "pron",
+  num: "num", numeral: "num", number: "num",
+  int: "int", interj: "int", interjection: "int", exclamation: "int",
+  art: "art", det: "art", determiner: "art", article: "art",
+  abbr: "abbr", abbreviation: "abbr",
+  phrase: "phr", idiom: "phr",
+};
+// exact lookup, never a prefix test: /^(n|noun)/ matches "num" and would file
+// every numeral under noun
+function lexisPosKey(p) {
+  var s = String(p || "").toLowerCase().replace(/[.\s]/g, "");
+  return LEXIS_POS_ALIAS[s] || "";
+}
+var LEXIS_GLOSS_POS = /^(vi|vt|vbl|v|n|adj|adv|prep|conj|pron|num|art|interj|int|aux|abbr|pl)\.\s*/i;
+// a transliterated surname or place name, which is what 【名】 blocks hold
+var LEXIS_GLOSS_NAME = /[（(](?:人名|地名|姓氏|人名、地名|地名、人名)[）)]/;
+function lexisGlossGroups(cn) {
+  var segs = String(cn || "").split(/[;；]/);
+  var groups = [], cur = null;
+  for (var i = 0; i < segs.length; i++) {
+    var seg = segs[i].replace(/\s+/g, " ").trim();
+    if (!seg) continue;
+    var m = seg.match(LEXIS_GLOSS_POS);
+    var k = m ? null : seg.match(/^【[^】]{1,6}】\s*/);
+    if (m) { cur = { pos: m[1].toLowerCase() + ".", senses: [] }; groups.push(cur); seg = seg.slice(m[0].length).trim(); }
+    else if (k) { cur = { pos: k[0].trim(), senses: [] }; groups.push(cur); seg = seg.slice(k[0].length).trim(); }
+    if (!cur) { cur = { pos: "", senses: [] }; groups.push(cur); }
+    if (seg) cur.senses.push(seg);
+  }
+  return groups;
+}
+function lexisGlossParts(cn) {
+  var out = [];
+  lexisGlossGroups(cn).forEach(function (g) {
+    var keep = g.senses.filter(function (s) { return !LEXIS_GLOSS_NAME.test(s); });
+    if (keep.length) out.push({ pos: g.pos, senses: keep });
+  });
+  return out;
+}
+// Full display (detail page, look-up card): every sense stays, the surname goes.
+function lexisCleanGloss(cn) {
+  var s = String(cn || "").trim();
+  if (!LEXIS_GLOSS_NAME.test(s)) return s;      // nothing to remove — don't reflow it
+  var gs = lexisGlossParts(s);
+  if (!gs.length) return "";
+  return gs.map(function (g) { return (g.pos ? g.pos + " " : "") + g.senses.join("；"); }).join("；");
+}
+// Cut prose back to one line, at a punctuation boundary when there is one.
+var LEXIS_GLOSS_CAP = 34;
+function lexisCapGloss(s) {
+  var t = String(s || "").trim();
+  if (t.length <= LEXIS_GLOSS_CAP) return t;
+  var head = t.slice(0, LEXIS_GLOSS_CAP);
+  var cut = Math.max(head.lastIndexOf("；"), head.lastIndexOf("。"), head.lastIndexOf("，"),
+                     head.lastIndexOf("："), head.lastIndexOf("、"));
+  if (cut >= 12) head = head.slice(0, cut);
+  return head.replace(/[，、：；。]+$/, "") + "…";
+}
+// One line, for a row or card that already names one part of speech.
+function lexisGlossLine(cn, pos, max) {
+  var s = String(cn || "").trim();
+  if (!s) return "";
+  var gs = lexisGlossParts(s);
+  if (!gs.length) return "";
+  // Not a dictionary block: a machine translation, a single English definition
+  // rendered into Chinese, a verb pattern's own gloss. Cutting a sentence at
+  // its semicolons would take meaning out of it, so it is not split — only
+  // capped, because a translated Wiktionary line ("液体或…或盛装液体或其他物质的
+  // 容器：（剧烈）煮沸；变得滚烫。…") is three lines of prose in a slot that has
+  // one, and it buries every other row on the page.
+  if (gs.length === 1 && !gs[0].pos) return lexisCapGloss(lexisCleanGloss(s));
+  var want = lexisPosKey(pos), pick = null;
+  if (want) {
+    for (var i = 0; i < gs.length && !pick; i++) if (lexisPosKey(gs[i].pos) === want) pick = gs[i];
+  }
+  var g = pick || gs[0];
+  var n = Math.max(1, max || 3);
+  var senses = g.senses.slice(0, n);
+  var more = g.senses.length > senses.length || gs.length > 1;
+  return (lexisPosKey(g.pos) ? g.pos + " " : "") + senses.join("；") + (more ? "…" : "");
+}
+
+// The Chinese for ONE row of a saved snapshot.
+//
+// A row's sentence is NOT a line, and it is not always inside one line either:
+// contextOf() (and vidSentenceAt() on the phone) cuts the sentence the word sits
+// in out of its line, and when that sentence is genuinely unfinished it BORROWS
+// THE WHOLE NEXT LINE, then caps the result at 300 characters. So a row can hold
+//
+//     <the tail of line i> + " " + <all of line i+1>          (truncated)
+//
+// which no single line contains. That is why matching by whole containment lit
+// up exactly the rows whose sentence happened to end in a full stop — in the
+// reported screenshot, one row out of five — and left the rest with an
+// English-only column while their Chinese sat on file the whole time.
+//
+// So: find the line the sentence STARTS in (by the head of it, not the whole of
+// it), then walk forward as far as the sentence actually reaches, and hand back
+// the Chinese of the lines it covers. `at` is only a hint, because it means a
+// paragraph index on an article and a timestamp in seconds on an episode.
+// A LINE's Chinese is a whole paragraph; a ROW shows one sentence of it.
+//
+// Handing back the whole line put four Chinese sentences beside one English one
+// — "消失了。在地球之下，泰坦们…。在金牛座的深处，他们沸腾着复仇的怒火。大地
+// 因他们的愤怒而震动，" next to "In the depths of Taurus, they seethed with
+// vengeance." Only the third of those is the row's sentence; the rest belong to
+// sentences the row is not showing, so the two columns stopped lining up.
+//
+// The translator is handed the line whole and keeps its sentence boundaries, so
+// when the English line and its Chinese split into the SAME NUMBER of sentences
+// the two are aligned index by index, and the window the row covers picks out
+// its own. When the counts disagree — an abbreviation split the English, the
+// translator merged two clauses — nothing is aligned and the whole line is
+// returned, because a confidently WRONG sentence is worse than a long right one.
+var LEXIS_EN_SENT = /[^.!?]*[.!?]+["'’”\)\]]?\s*|[^.!?]+$/g;
+var LEXIS_ZH_SENT = /[^。！？!?]*[。！？!?]+["'’”\)\]）】]?\s*|[^。！？!?]+$/g;
+function lexisSplitSpans(text, re) {
+  var out = [], m;
+  re.lastIndex = 0;
+  while ((m = re.exec(text))) {
+    if (!m[0]) { re.lastIndex++; continue; }
+    if (m[0].trim()) out.push({ text: m[0], start: m.index, end: m.index + m[0].length });
+  }
+  return out;
+}
+// the part of `z` that covers characters [from, to) of `x`
+function lexisAlignZh(x, z, from, to) {
+  var es = lexisSplitSpans(x, LEXIS_EN_SENT);
+  var zs = lexisSplitSpans(z, LEXIS_ZH_SENT);
+  if (es.length < 2 || zs.length < 2) return z;
+  var keep = [], i;
+  if (es.length === zs.length) {
+    // the translator kept the sentence boundaries — align index by index
+    for (i = 0; i < es.length; i++) {
+      var lo = Math.max(from, es[i].start), hi = Math.min(to, es[i].end);
+      var ov = hi - lo;
+      // a sentence counts as shown when the window really covers it, not when
+      // it merely brushes its last few characters
+      if (ov > 0 && (ov >= 12 || ov >= (es[i].end - es[i].start) * 0.5)) keep.push(zs[i].text.trim());
+    }
+  } else {
+    // The counts disagree — an abbreviation split the English, or the
+    // translator merged two clauses. Index alignment is off by one from there
+    // on, so instead the window is mapped onto the Chinese BY PROPORTION and
+    // snapped out to whole Chinese sentences. It is an approximation, which is
+    // why it only survives below when it picks a real subset: reporting most of
+    // the paragraph is no better than reporting all of it.
+    var xl = x.length || 1, zl = z.length;
+    var p0 = (from / xl) * zl, p1 = (to / xl) * zl;
+    for (i = 0; i < zs.length; i++) {
+      var zlo = Math.max(p0, zs[i].start), zhi = Math.min(p1, zs[i].end);
+      var zov = zhi - zlo, len = zs[i].end - zs[i].start;
+      if (zov > 0 && zov >= len * 0.4) keep.push(zs[i].text.trim());
+    }
+    if (keep.length >= zs.length) keep = [];      // it selected everything — no better than the whole line
+  }
+  return keep.length ? keep.join("") : z;
+}
+// Where in `lines` does this snapshot row's sentence sit? Shared by the two
+// things that need it: the Chinese for the row, and re-cutting the sentence
+// itself for a snapshot recorded before the extractor knew how to look back.
+function lexisSnapLocate(lines, sent, at) {
+  var ls = lines || [];
+  if (!ls.length) return null;
+  var norm = function (x) { return String(x == null ? "" : x).replace(/\s+/g, " ").trim(); };
+  // extractContext prepends/appends an ellipsis when it fell back to a window
+  var core = norm(String(sent || "").replace(/^…\s*/, "").replace(/\s*…$/, ""));
+  if (!core) return null;
+  // progressively shorter heads, each ending on a word boundary — a raw slice
+  // ends mid-word ("…ddd eee ") and then matches nothing at all
+  var heads = [core];
+  [48, 24, 14].forEach(function (n) {
+    if (core.length <= n) return;
+    var h = core.slice(0, n), sp = h.lastIndexOf(" ");
+    if (sp > 8) h = h.slice(0, sp);
+    if (heads.indexOf(h) === -1) heads.push(h);
+  });
+  // Every line it could start in, best head first — and then the first
+  // candidate that PROVES it. The last-resort head is only fourteen characters,
+  // so on a long transcript it lands on any line that merely opens the same
+  // way; taking the first hit gave one row a whole paragraph of Chinese about
+  // something else, which is worse than none at all.
+  var toks = core.toLowerCase().match(/[a-z][a-z'-]{2,}/g) || [];
+  var proves = function (st, of) {
+    var left = core.length - (norm(ls[st].x).length - of);
+    var en = st;
+    while (left > 8 && en + 1 < ls.length) { en++; left -= norm(ls[en].x).length + 1; }
+    if (toks.length >= 4) {
+      var span = "";
+      for (var c0 = st; c0 <= en; c0++) span += " " + norm(ls[c0].x);
+      span = span.toLowerCase();
+      var hit = 0;
+      for (var t0 = 0; t0 < toks.length; t0++) if (span.indexOf(toks[t0]) !== -1) hit++;
+      if (hit / toks.length < 0.6) return null;
+    }
+    return { start: st, off: of, end: en, core: core };
+  };
+  var order = [];
+  if (at >= 0 && at < ls.length) order.push(at);
+  for (var i0 = 0; i0 < ls.length; i0++) if (i0 !== at) order.push(i0);
+  for (var h0 = 0; h0 < heads.length; h0++) {
+    for (var q = 0; q < order.length; q++) {
+      var xi = norm(ls[order[q]].x), k0 = xi.indexOf(heads[h0]);
+      if (k0 !== -1) { var got = proves(order[q], k0); if (got) return got; }
+    }
+  }
+  return null;
+}
+// A snapshot recorded before the extractor could look BACKWARDS stored the tail
+// of a sentence as though it were the sentence ("eternity.", "far from
+// tranquil."). The transcript is in the same file, so the row can be re-cut on
+// screen instead of waiting for you to record the episode again.
+function lexisSnapSentence(lines, sent, at) {
+  var loc = lexisSnapLocate(lines, sent, at);
+  if (!loc) return String(sent || "");
+  var ls = lines, g = function (k) { return (ls[k] || {}).x || ""; };
+  var out = lexisSentenceAt(g(loc.start), loc.off, g(loc.start - 1), g(loc.start + 1));
+  // never hand back LESS than was stored
+  return out.length >= String(sent || "").length ? out : String(sent || "");
+}
+function lexisSnapZh(lines, sent, at) {
+  var ls = lines || [];
+  var loc = lexisSnapLocate(ls, sent, at);
+  if (!loc) return "";
+  var norm = function (x) { return String(x == null ? "" : x).replace(/\s+/g, " ").trim(); };
+  var core = loc.core, start = loc.start, off = loc.off, end = loc.end;
+  var out = [], covered = 0;
+  for (var j = start; j <= end; j++) {
+    var x = norm(ls[j].x), z = norm(ls[j].z);
+    var from = (j === start) ? off : 0;
+    var to = Math.min(x.length, from + (core.length - covered));
+    covered += x.length - from + 1;          // +1 for the space contextOf() joins with
+    if (!z) continue;
+    var part = lexisAlignZh(x, z, from, to);
+    // a span's translation sits on its head line, so two covered lines can carry
+    // the same string — say it once
+    if (part && out.indexOf(part) === -1) out.push(part);
+  }
+  return out.join("");
+}
+
+// The sentence a word sits in, when the text was cut into lines that ignore it.
+//
+// A caption line — and a length-cut transcript line — starts and ends wherever
+// the cut fell, so the sentence you want routinely straddles two of them. The
+// extractors only ever borrowed FORWARD ("this sentence has no full stop, take
+// the next line"), which leaves the mirror case broken: a line that BEGINS
+// mid-sentence hands back its opening fragment as though it were a sentence.
+// That is where rows like "devised a plan." and "summoning storms that
+// swallowed ships whole." came from — both are the tail of a sentence whose
+// head is on the line above.
+//
+// So: borrow backwards on the same terms as forwards — only when the join is
+// genuinely unfinished, and only one line in each direction. `prev`/`next` are
+// passed in as strings so the caller decides what counts as adjacent (the
+// subtitle sidebar refuses a neighbour that is seconds away in time).
+var LEXIS_SENT_SPLIT = /[^.!?。！？]*[.!?。！？]+["'’”\)\]]?\s*|[^.!?。！？]+$/g;
+var LEXIS_SENT_END = /[.!?。！？]["'’”\)\]]?\s*$/;
+function lexisSentenceAt(text, off, prev, next, cap) {
+  var t = String(text == null ? "" : text);
+  if (!t.trim()) return "";
+  var m, out = "", first = "", atStart = false, isFirst = true, hit = false;
+  LEXIS_SENT_SPLIT.lastIndex = 0;
+  while ((m = LEXIS_SENT_SPLIT.exec(t))) {
+    if (!m[0]) { LEXIS_SENT_SPLIT.lastIndex++; continue; }
+    if (!m[0].trim()) { isFirst = false; continue; }
+    if (!first) { first = m[0]; }
+    if (!hit && off >= m.index && off < m.index + m[0].length) {
+      out = m[0]; atStart = isFirst; hit = true; break;
+    }
+    isFirst = false;
+  }
+  if (!hit) { out = first || t; atStart = true; }
+  out = out.trim();
+  // the head of it is on the line above
+  var p = String(prev == null ? "" : prev).trim();
+  if (atStart && p && !LEXIS_SENT_END.test(p)) {
+    var head = "";
+    LEXIS_SENT_SPLIT.lastIndex = 0;
+    var pm;
+    while ((pm = LEXIS_SENT_SPLIT.exec(p))) { if (pm[0] && pm[0].trim()) head = pm[0]; }
+    head = (head || p).trim();
+    if (head) out = head + " " + out;
+  }
+  // …and the tail of it on the line below
+  if (!LEXIS_SENT_END.test(out)) {
+    var n = String(next == null ? "" : next).trim();
+    if (n) out += " " + n;
+  }
+  return out.replace(/\s+/g, " ").trim().slice(0, cap || 300);
+}
+
+// Is this "base form" safe to show INSTEAD of the word you actually read?
+//
+// The 44,796-head table folds inflections onto a head, and its head is normally
+// exactly what a learner wants to see (overseeing → oversee). But the fold was
+// built with the same de-inflection used to query it, and web2 — a 1913 word
+// list — vouches for archaic words nobody meets. So `greed` got folded onto
+// `gree` ("a step in a flight of steps"), and the row displayed `gree`, looked
+// up `gree`, and glossed it 一段台阶中的一个 — a different word entirely.
+//
+// The collision only exists on a BARE -d, where "gree"+d and "seethe"+d are the
+// same shape and no morphology can separate them. Everything else (-s, -es,
+// -ing, -ed, -ied) reconstructs unambiguously. So a bare -d onto a head of
+// fewer than five letters is refused, and the word you read is kept. Measured
+// over the forms this app actually meets, that rejects exactly greed→gree and
+// freed→free and keeps seethe, devise, dwindle, intrigue, preside, oversee.
+function lexisSafeHead(surface, head) {
+  var w = String(surface || "").toLowerCase();
+  var h = String(head || "").toLowerCase();
+  if (!h || h === w) return w;
+  if (/d$/.test(w) && h === w.slice(0, -1) && h.length < 5) return w;
+  return h;
+}
+
+if (typeof window !== "undefined") { window.LEXIS_SEED = LEXIS_SEED; window.LEXIS_SEED_FLAT = LEXIS_SEED_FLAT; window.LEXIS_FREQ = LEXIS_FREQ; window.LEXIS_COMMON = LEXIS_COMMON; window.LEXIS_MORPH = LEXIS_MORPH; window.lexisAnalyzeMorph = lexisAnalyzeMorph; window.lexisWordDomain = lexisWordDomain; window.LEXIS_SCENE_CN = LEXIS_SCENE_CN; window.lexisIdiomScene = lexisIdiomScene; window.LEXIS_PHRASE_SEED = LEXIS_PHRASE_SEED; window.LEXIS_PHRASE_SEED_FLAT = LEXIS_PHRASE_SEED_FLAT; window.lexisPhraseScene = lexisPhraseScene; window.lexisSingularize = lexisSingularize; window.LEXIS_PASSAGES = LEXIS_PASSAGES; window.LEXIS_BAND_SIZE = LEXIS_BAND_SIZE; window.LEXIS_BAND_SEQ = LEXIS_BAND_SEQ; window.LEXIS_BAND_LABEL = LEXIS_BAND_LABEL; window.lexisWordBand = lexisWordBand; window.lexisPassageTokens = lexisPassageTokens; window.lexisEstimateFromReading = lexisEstimateFromReading; window.LEXIS_PROPER_NOUNS = LEXIS_PROPER_NOUNS; window.LEXIS_JUNK_WORDS = LEXIS_JUNK_WORDS; window.lexisIsNoiseWord = lexisIsNoiseWord; window.LEXIS_ABBREV = LEXIS_ABBREV; window.lexisStemCandidates = lexisStemCandidates; window.LEXIS_PHRASE_LIST = LEXIS_PHRASE_LIST; window.LEXIS_PHRASE_EXAMPLE = LEXIS_PHRASE_EXAMPLE; window.LEXIS_PTYPE_CN = LEXIS_PTYPE_CN; window.LEXIS_KIND_CN = LEXIS_KIND_CN; window.LEXIS_PTYPE_RULE = LEXIS_PTYPE_RULE; window.lexisKindOf = lexisKindOf; window.lexisDataScore = lexisDataScore; window.lexisMergeData = lexisMergeData; window.lexisMergeWordPair = lexisMergeWordPair; window.lexisMergeNotebooks = lexisMergeNotebooks; window.lexisDedupeWords = lexisDedupeWords; window.lexisTombKeys = lexisTombKeys; window.lexisTombAt = lexisTombAt; window.lexisPhraseType = lexisPhraseType; window.LEXIS_PHAVE_LIST = LEXIS_PHAVE_LIST; window.LEXIS_PHAVE_MAP = LEXIS_PHAVE_MAP; window.LEXIS_DRILL_CN = LEXIS_DRILL_CN; window.LEXIS_DRILL_EN = LEXIS_DRILL_EN; window.lexisHashText = lexisHashText; window.lexisSentenceQuality = lexisSentenceQuality; window.lexisClozeSplit = lexisClozeSplit; window.lexisWordSentences = lexisWordSentences; window.lexisSenseFor = lexisSenseFor; window.lexisProduced = lexisProduced; window.lexisProduceTarget = lexisProduceTarget; window.lexisBuildDrill = lexisBuildDrill; window.lexisMarkDrill = lexisMarkDrill; window.LEXIS_STR_MAX = LEXIS_STR_MAX; window.LEXIS_DRILL_RUNG = LEXIS_DRILL_RUNG; window.lexisDrillRung = lexisDrillRung; window.lexisDrillScores = lexisDrillScores; window.lexisStrengthOf = lexisStrengthOf; window.lexisEditDistance = lexisEditDistance; window.lexisNormAns = lexisNormAns; window.lexisCheckAnswer = lexisCheckAnswer; window.lexisGradeFor = lexisGradeFor; window.LEXIS_SLOW_MS = LEXIS_SLOW_MS; window.lexisSchedule = lexisSchedule; window.lexisVideoRef = lexisVideoRef; window.lexisFmtAt = lexisFmtAt; window.LEXIS_FREQ_SUPP = LEXIS_FREQ_SUPP; window.LEXIS_PV_ALL = LEXIS_PV_ALL; window.LEXIS_EXPR_ALL = LEXIS_EXPR_ALL; window.LEXIS_IDIOM_SET = LEXIS_IDIOM_SET; window.LEXIS_TAB_WHAT = LEXIS_TAB_WHAT; window.lexisChunksWith = lexisChunksWith; window.lexisCleanChunk = lexisCleanChunk; window.LEXIS_COMPOUND_TAIL = LEXIS_COMPOUND_TAIL; window.lexisCompoundGloss = lexisCompoundGloss; window.lexisBreakdownParts = lexisBreakdownParts; window.lexisChunksInside = lexisChunksInside; window.lexisTermBreakdown = lexisTermBreakdown; window.lexisBreakdownUseful = lexisBreakdownUseful; window.LEXIS_QUICK_CORE = LEXIS_QUICK_CORE; window.LEXIS_QUICK_LEVELS = LEXIS_QUICK_LEVELS; window.LEXIS_QUICK_BANK = LEXIS_QUICK_BANK; window.LEXIS_PSEUDO = LEXIS_PSEUDO; window.lexisQuickRound = lexisQuickRound; window.lexisQuickTally = lexisQuickTally; window.lexisQuickEstimate = lexisQuickEstimate; window.lexisQuickFrontier = lexisQuickFrontier; window.lexisChunkSample = lexisChunkSample; window.lexisChunkTally = lexisChunkTally; window.lexisFmtRank = lexisFmtRank; window.lexisPoolPos = lexisPoolPos; window.lexisPhraseRank = lexisPhraseRank; window.lexisPhraseInfo = lexisPhraseInfo; window.lexisChunkKnown = lexisChunkKnown; window.lexisFindChunks = lexisFindChunks; window.LEXIS_VPAT = LEXIS_VPAT; window.LEXIS_VPAT_MAP = LEXIS_VPAT_MAP; window.LEXIS_VPAT_GAP = LEXIS_VPAT_GAP; window.lexisFindVPats = lexisFindVPats; window.lexisFindUnits = lexisFindUnits; window.lexisVPatInfo = lexisVPatInfo; window.lexisIsVPat = lexisIsVPat; window.lexisChunkWorthMarking = lexisChunkWorthMarking; window.lexisFoldFamilies = lexisFoldFamilies; window.lexisPhraseToks = lexisPhraseToks; window.lexisTokSame = lexisTokSame; window.lexisRankInfo = lexisRankInfo; window.lexisRankText = lexisRankText; window.lexisStemCommon = lexisStemCommon; window.lexisWorthWord = lexisWorthWord; window.LEXIS_IRREG = LEXIS_IRREG; window.lexisLemmaCandidates = lexisLemmaCandidates; window.LEXIS_RANK_BANDS = LEXIS_RANK_BANDS; window.LEXIS_RANK_BAND_CN = LEXIS_RANK_BAND_CN; window.LEXIS_RANK_BAND_EN = LEXIS_RANK_BAND_EN; window.lexisRankBandOf = lexisRankBandOf; window.LEXIS_FORM_OF = LEXIS_FORM_OF; window.lexisIsFormOf = lexisIsFormOf; window.lexisFormOfBase = lexisFormOfBase; window.lexisRankSenses = lexisRankSenses; window.lexisBestSense = lexisBestSense; window.lexisPosKey = lexisPosKey; window.lexisGlossGroups = lexisGlossGroups; window.lexisGlossParts = lexisGlossParts; window.lexisCleanGloss = lexisCleanGloss; window.lexisGlossLine = lexisGlossLine; window.lexisSnapZh = lexisSnapZh; window.lexisCapGloss = lexisCapGloss; window.lexisAlignZh = lexisAlignZh; window.lexisSentenceAt = lexisSentenceAt; window.lexisSafeHead = lexisSafeHead; window.lexisSnapLocate = lexisSnapLocate; window.lexisSnapSentence = lexisSnapSentence; }

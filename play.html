@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lexis · play</title>
+<!--
+  A YouTube embed refuses to play when the page framing it has no ordinary
+  https origin: a chrome-extension:// page gets "Error 153 · Video player
+  configuration error". So the extension frames THIS page instead, and this
+  page — served from https://luyichen1121.github.io — frames the embed. One
+  static file, no script from YouTube, no key.
+
+  ?v=<videoId>&s=<startSeconds>&e=<endSeconds>   ("e" is what stops it at the
+  end of the sentence rather than playing on.)
+-->
+<style>
+  html,body{margin:0;height:100%;background:#000}
+  iframe{border:0;width:100%;height:100%;display:block}
+  p{color:#ddd;font:14px/1.6 system-ui;padding:16px}
+  a{color:#fff}
+</style>
+<script>
+  (function () {
+    var q = new URLSearchParams(location.search);
+    var v = (q.get("v") || "").replace(/[^A-Za-z0-9_-]/g, "");
+    if (!v) { document.write("<p>No video.</p>"); return; }
+    var n = function (k) { var x = parseInt(q.get(k), 10); return isFinite(x) && x >= 0 ? x : null; };
+    var s = n("s"), e = n("e");
+    var src = "https://www.youtube.com/embed/" + v + "?autoplay=1&rel=0&modestbranding=1"
+      + (s == null ? "" : "&start=" + s) + (e == null ? "" : "&end=" + e);
+    var f = document.createElement("iframe");
+    f.src = src;
+    f.allow = "autoplay; encrypted-media";
+    f.setAttribute("allowfullscreen", "");
+    document.body.appendChild(f);
+  })();
+</script>

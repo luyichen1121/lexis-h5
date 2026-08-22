@@ -7,6 +7,16 @@
   const $ = (s, r) => (r || document).querySelector(s);
   const el = (h) => { const d = document.createElement("div"); d.innerHTML = h.trim(); return d.firstElementChild; };
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  // A Chinese gloss is stored as the dictionary's whole 英汉 block — every part
+  // of speech at once, plus Youdao's transliterated-surname line. `glossLine` is
+  // for the places with room for ONE line (a notebook row, the back of a review
+  // card): it keeps the part of speech that place is already claiming.
+  // `glossFull` is for the card that shows the entry: it only drops the surname.
+  // Both live in vocab.js so this says exactly what the extension says.
+  const glossLine = (cn, pos, max) =>
+    (typeof window.lexisGlossLine === "function" ? window.lexisGlossLine(cn, pos, max) : String(cn || ""));
+  const glossFull = (cn) =>
+    (typeof window.lexisCleanGloss === "function" ? window.lexisCleanGloss(cn) : String(cn || ""));
   const DAY = 86400000;
   const now = () => Date.now();
   const norm = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ").replace(/^[^\w']+|[^\w']+$/g, "");
@@ -26,7 +36,11 @@
               // take the notebook's own writes down with it. The full record is
               // fetched from its own gist file when you open an episode.
               videos: "lexis_video_index" };
-  const DEFAULT_SETTINGS = { chinese: true, dailyNewLimit: 15, dailyGoal: 20, showExamples: true, autoEnrich: true, reviewDrill: "auto", glossLang: "both", gistToken: "", gistId: "" };
+  // vocabLevel: the one number that says "words this common are already mine".
+  // 0 = defer to the reading assessment. It is the SAME key the extension keeps,
+  // so it rides the settings the two surfaces already share rather than becoming
+  // a second, phone-only idea of your level.
+  const DEFAULT_SETTINGS = { chinese: true, dailyNewLimit: 15, dailyGoal: 20, showExamples: true, autoEnrich: true, reviewDrill: "auto", glossLang: "both", vocabLevel: 6000, vocabLevelSet: false, gistToken: "", gistId: "" };
   function load(k, fb) { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? fb : v; } catch (e) { return fb; } }
   function save(k, v) { localStorage.setItem(k, JSON.stringify(v)); }
   // Strip punctuation a selection dragged in ("word," / “word” / (word).),
@@ -211,7 +225,9 @@
           for (const d of m.definitions || [])
             if (d.definition) meanings.push({ pos: posShort(m.partOfSpeech), definition: d.definition, cn: "", example: d.example || "" });
       }
-      return { phonetic, audioUs, audioUk, meanings };
+      // the API's own order puts "Fop, dandy." first for `exquisite` and the
+      // archaic verb first for `recurring` — see lexisRankSenses in vocab.js
+      return { phonetic, audioUs, audioUk, meanings: lexisRankSenses(meanings, term) };
     } catch (e) { return null; }
   }
 
@@ -388,7 +404,7 @@
     return null;
   }
 
-  async function fetchWiktionary(term) {
+  async function fetchWiktionary(term, followed) {
     const title = term.trim().replace(/\s+/g, "_");
     let j;
     try { j = await jget("https://en.wiktionary.org/api/rest_v1/page/definition/" + encodeURIComponent(title)); }
@@ -408,7 +424,20 @@
         }
       }
     }
-    return senses.length || examples.length ? { senses, examples } : null;
+    if (!senses.length) return examples.length ? { senses, examples } : null;
+    const ranked = lexisRankSenses(senses, term);
+    // An inflected form's page IS only a pointer ("simple past … of devise").
+    // Follow it once and answer with the lemma, saying so, rather than print it.
+    if (!followed && ranked.every((m) => lexisIsFormOf(m.definition))) {
+      const base = lexisFormOfBase(ranked[0].definition);
+      if (base && base !== term.toLowerCase()) {
+        const b = await fetchWiktionary(base, true).catch(() => null);
+        if (b && (b.senses || []).length) {
+          return { senses: b.senses, examples: examples.length ? examples : b.examples, variantOf: base };
+        }
+      }
+    }
+    return { senses: ranked.slice(0, 6), examples };
   }
 
   // Authentic example sentences from Tatoeba (human-written). The old api_v0 has
@@ -416,7 +445,12 @@
   async function fetchTatoeba(term) {
     let j;
     try {
-      j = await jget("https://api.tatoeba.org/unstable/sentences?lang=eng&sort=relevance&limit=20&q=" + encodeURIComponent(term));
+      // limit=100, not 20. `sort=relevance` returns the SHORTEST exact match
+      // first, so the first twenty rows for "vanished" are twenty ways of
+      // writing "Tom vanished." and the sentences that show the word doing
+      // something ("vanished into thin air", "vanished before Rima's eyes")
+      // start around row thirty of the same free request.
+      j = await jget("https://api.tatoeba.org/unstable/sentences?lang=eng&sort=relevance&limit=100&q=" + encodeURIComponent(term));
     } catch (e) { return []; }
     const rows = (j && j.data) || [];
     let re;
@@ -426,13 +460,14 @@
     for (const r of rows) {
       const text = ((r && r.text) || "").trim();
       if (!text || !re.test(text)) continue;
-      const n = text.split(/\s+/).length;
-      if (n < 4 || n > 26) continue;            // too stubby / too rambling to learn from
       if (out.some((o) => o.text === text)) continue;
       out.push({ text, translation: "" });
-      if (out.length >= 4) break;
+      if (out.length >= 60) break;
     }
-    return out;
+    // `sort=relevance` returns the SHORTEST exact match first, so taking the top
+    // few gave "She vanished." / "Tom vanished." / "They vanished." while the
+    // sentences that show the word in use sat further down the same payload.
+    return window.lexisPickExamples ? window.lexisPickExamples(out, term, { max: 4 }) : out.slice(0, 4);
   }
 
   // Chinese translation. Google's gtx endpoint is CORS-open, free and far better
@@ -547,6 +582,11 @@
   const phraseInfoOf = (t) =>
     (typeof window.lexisPhraseInfo === "function") ? window.lexisPhraseInfo(String(t || "").toLowerCase().trim()) : null;
   function phraseChip(term) {
+    // a verb pattern is not a phrase and is on no list — "not on the phrase
+    // lists" would report a gap in our data about something that was never
+    // supposed to be there
+    const vp = (typeof lexisVPatInfo === "function") ? lexisVPatInfo(term) : null;
+    if (vp) return `<span class="mfreq phr cur" title="A verb and the preposition it takes. Patterns aren't on any frequency list.">verb pattern</span>`;
     const i = phraseInfoOf(term);
     return i
       ? `<span class="mfreq phr${i.src === "cur" ? " cur" : ""}" title="${esc(i.title)}">${esc(i.text)}</span>`
@@ -687,6 +727,19 @@
   async function lookup(rawTerm) {
     const term = norm(rawTerm);
     if (!term) return { error: true };
+    // A VERB PATTERN answers itself, offline. No dictionary has an entry for
+    // "conceal sth from sb", so every source below can only come back empty and
+    // the card would print "no entry" over something perfectly real.
+    const vrow = (typeof window.lexisVPatInfo === "function") ? window.lexisVPatInfo(term) : null;
+    if (vrow) {
+      return {
+        term: vrow.term, cn: vrow.cn, vpat: vrow, done: true, isPhrase: true,
+        phonetic: "", audioUs: "", audioUk: "", freq: null,
+        meanings: [{ pos: "verb pattern", definition: vrow.term, cn: vrow.cn }],
+        examples: [], synonyms: [], synonymsRich: [], family: [], lookalikes: [],
+        collocations: [], sensesFrom: "Lexis verb patterns",
+      };
+    }
     const isPhrase = /\s/.test(term);
     const [dict, wik, dm, cn, freq] = await Promise.all([
       isPhrase ? Promise.resolve(null) : withTimeout(fetchDictionary(term), 8000, null),
@@ -752,6 +805,7 @@
   // Best-effort and idempotent, so it is safe to re-run on a saved word.
   async function enrichPreview(p) {
     if (!p || p.error) return p;
+    if (p.vpat) return p;                 // complete already, and nothing to ask
     const wantCn = wantCnNow();
     // Wiktionary often supplies bare collocations ("meticulous search") rather
     // than sentences, so top up from Tatoeba unless we already have real ones,
@@ -784,10 +838,12 @@
         if ((p.examples || []).length) break;
       }
     }
-    p.examples = (p.examples || [])
-      .map((e, i) => ({ e, i }))
-      .sort((a, b) => (wordy(b.e.text) ? 1 : 0) - (wordy(a.e.text) ? 1 : 0) || a.i - b.i)
-      .map((x) => x.e).slice(0, 4);
+    // One gate decides what an example is worth, here and in the extension: a
+    // bare subject + verb + full stop teaches nothing, and three of them wearing
+    // different subjects are one sentence, not three.
+    p.examples = window.lexisPickExamples
+      ? window.lexisPickExamples(p.examples || [], p.term, { max: 4, context: p.context || "" })
+      : (p.examples || []).slice(0, 4);
     if (wantCn) {
       const needEx = (p.examples || []).filter((e) => !e.translation);
       const needSense = (p.meanings || []).slice(0, 3).filter((m) => !m.cn);
@@ -820,21 +876,10 @@
   // will EVER have an entry. The pattern gloss, the chunks inside it and the
   // classification are computed offline in data/vocab.js; only a one-line gloss
   // per part needs the network. Mirrors fetchPartGlosses() in background.js.
-  // dictionaryapi.dev groups senses by part of speech in its own order, so sense
-  // #1 of "sensitive" is the rare NOUN. The pos with the MOST senses is the
-  // word's real job. (Same helper in background.js — keep them in step.)
-  function bestSense(list) {
-    const groups = new Map();
-    (list || []).forEach((m) => {
-      if (!m || !m.definition) return;
-      const k = (m.pos || "").toLowerCase();
-      if (!groups.has(k)) groups.set(k, []);
-      groups.get(k).push(m);
-    });
-    let best = null;
-    groups.forEach((v) => { if (!best || v.length > best.length) best = v; });
-    return best ? best[0] : null;
-  }
+  // Which sense to show is one engine, shared with the extension — see
+  // lexisRankSenses in vocab.js. A second opinion here is how the same word
+  // ends up glossed differently on the phone than on the Mac.
+  const bestSense = (list, term) => lexisBestSense(list, term);
   const partGlossCache = {};
   async function fetchPartGlosses(parts, wantCn) {
     const out = {};
@@ -844,11 +889,11 @@
       if (partGlossCache[k]) { out[k] = partGlossCache[k]; return; }
       let g = null;
       const dict = await withTimeout(fetchDictionary(k), 7000, null);
-      const dm0 = dict && bestSense(dict.meanings);
+      const dm0 = dict && bestSense(dict.meanings, k);
       if (dm0) g = { pos: dm0.pos || "", definition: dm0.definition };
       if (!g) {
         const wk = await withTimeout(fetchWiktionary(k), 7000, null);
-        const s = wk && bestSense(wk.senses);
+        const s = wk && bestSense(wk.senses, k);
         if (s) g = { pos: s.pos || "", definition: s.definition };
       }
       if (!g) return;
@@ -878,11 +923,12 @@
     let h = `<div class="card">
       <div class="row" style="align-items:baseline">
         <span class="hw serif">${esc(p.term)}</span>
-        ${p.phonetic ? `<span class="phon">${esc(p.phonetic)}</span>` : ""}
-        ${spk("US", p.audioUs)}
-        ${freqChip(p.freq, p.term)}
+        ${p.vpat ? "" : `${p.phonetic ? `<span class="phon">${esc(p.phonetic)}</span>` : ""}${spk("US", p.audioUs)}${freqChip(p.freq, p.term)}`}
       </div>
-      ${p.cn ? `<div class="cn-gloss">${esc(p.cn)}</div>` : ""}
+      ${p.cn ? `<div class="cn-gloss">${esc(glossFull(p.cn))}</div>` : ""}
+      ${p.vpat ? `<p class="muted" style="font-size:12px;margin:6px 0 0;line-height:1.6">Verb pattern · Lexis. You already know
+        <b>${esc(p.vpat.v)}</b> — the part that isn't guessable is that it takes <b>${esc(p.vpat.p)}</b>,
+        and the object usually sits in between. No dictionary lists the pattern itself.</p>` : ""}
       ${opts.saveBtn ? `<div class="row" style="margin-top:12px">${opts.saveBtn}</div>` : ""}
     </div>`;
 
@@ -937,7 +983,7 @@
       } catch (e) { return esc(txt); }
     };
     // 释义 (memory-first)
-    if (p.meanings.length) {
+    if (p.meanings.length && !p.vpat) {
       // A saved phrase is often a surface fragment whose dictionary headword is
       // shorter ("quibble about" → "quibble"). We look that up rather than showing
       // nothing — but the definition belongs to the shorter form, so name it.
@@ -1071,11 +1117,12 @@
   function findWord(term) { const t = norm(term); return getWords().find((w) => w.lookup === t); }
   function saveWord(p) {
     const words = getWords();
-    if (words.some((w) => w.lookup === p.term)) return false;
-    untombstone(p.term);   // saving it again is an explicit "I want this back"
+    const key = norm(p.term);
+    if (words.some((w) => w.lookup === key)) return false;
+    untombstone(key);      // saving it again is an explicit "I want this back"
     words.unshift({
       id: "w" + now() + Math.random().toString(36).slice(2, 6),
-      word: p.term, lookup: p.term, createdAt: now(), updatedAt: now(),
+      word: p.term, lookup: key, createdAt: now(), updatedAt: now(),
       context: p.context || "",
       // every original sentence is kept as a dated sighting so past examples never get lost
       sightings: p.context ? [{ context: p.context, at: now(), source: p.source || "Paste & save" }] : [],
@@ -1089,6 +1136,9 @@
         // the composed entry for a term no dictionary lists — see the breakdown
         // card in cardHTML(); without this it was thrown away on save
         partGlosses: p.partGlosses || null,
+        // a verb pattern is complete the moment it is saved: nothing to fetch,
+        // and no sweep may go looking and overwrite it with "not found"
+        vpat: !!p.vpat, done: !!p.done,
       },
       srs: { due: now(), interval: 0, ease: 2.5, reps: 0, lapses: 0, last: 0 },
     });
@@ -1250,12 +1300,21 @@
   // haven't. `nbView` says whether the tab is currently showing the list, a
   // look-up result, or a saved word's detail.
   let nbView = { mode: "list", term: "", ctx: "", id: null };
+  // Every tab shares ONE document scroll. Sending it to the top on every go()
+  // meant scrolling down the notebook cost you your place in Discover, and you
+  // had to scroll back down each time you switched — and a background sync
+  // repaint (go(current)) yanked you to the top mid-read. Each tab now keeps
+  // its own offset: saved on the way out, restored on the way in, top for a tab
+  // you have never opened. Repainting the tab you are already on restores the
+  // offset it just saved, so it no longer moves you at all.
+  const tabScroll = Object.create(null);
   function go(tab) {
     if (tab === "lookup") tab = "notebook";
+    tabScroll[current] = window.scrollY;
     current = tab;
     document.querySelectorAll(".tabbar button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
     ({ notebook: renderNotebook, review: renderReview, discover: renderDiscover, me: renderMe }[tab])();
-    window.scrollTo(0, 0);
+    window.scrollTo(0, tabScroll[tab] || 0);
     refreshBadge();
   }
 
@@ -1327,6 +1386,7 @@
   function openLookupPane() {
     if (current !== "notebook") go("notebook");
     document.body.classList.add("looking");
+    window.scrollTo(0, 0); // a fresh look-up card starts at the top, not at the list's offset
     return $("#result");
   }
   function closeLookup() {
@@ -1417,6 +1477,10 @@
 
   // ---- NOTEBOOK ----
   let nbFilter = "all", nbScene = null, nbSort = "new", nbQuery = "", nbKind = "all", nbCtrlsOpen = false;
+  // Set once you pick a sort yourself. Until then the Mastered tab orders by
+  // recency — frequency answers "what should I learn next", which is not the
+  // question you ask about words you have already finished.
+  let nbSortPicked = false;
   // SAME three buckets as Discover — 单词 / Phrasal verbs / Fixed expressions — from the same
   // shared classifier, so a term carries one label everywhere it appears. The
   // finer split (习语/介词短语/…) is the chip row below.
@@ -1446,8 +1510,12 @@
   }
   const NB_BAND_ORDER = { core: 0, "very-common": 1, common: 2, mid: 3, low: 4, rare: 5 };
   const NB_SORTS = [["new", "Recently saved"], ["freq", "Frequency"], ["due", "Due"], ["az", "A–Z"]];
+  function effNbSort() {
+    return nbSortPicked ? nbSort : (nbFilter === "mastered" ? "new" : nbSort);
+  }
   function nbSortList(list) {
     const l = list.slice();
+    const nbSort = effNbSort();
     if (nbSort === "freq") {
       // by band first (常用→生僻), then by corpus rank inside the band
       return l.sort((a, b) => {
@@ -1482,7 +1550,7 @@
       <div class="sortbar nb-only" id="nbsort">
         <button class="catf ctrl-toggle" id="nbMore">Filter · sort ▾</button>
         <span class="ctrl-wrap">Sort: ${NB_SORTS.map(([k, cn]) =>
-          `<button class="catf${nbSort === k ? " on" : ""}" data-s="${k}">${cn}</button>`).join("")}
+          `<button class="catf${effNbSort() === k ? " on" : ""}" data-s="${k}">${cn}</button>`).join("")}
           <span class="muted" style="font-size:12px;flex-basis:100%">The tag after each word is its <b>frequency</b>: core / very common / common / mid / low / rare — the earlier, the more worth learning first.</span>
         </span>
       </div>
@@ -1499,7 +1567,7 @@
       $("#nbMore").textContent = nbCtrlsOpen ? "Collapse ▴" : "Filter · sort ▾";
     });
     if (nbCtrlsOpen) { view.querySelectorAll(".ctrl-wrap").forEach((n) => n.classList.add("open")); $("#nbMore").textContent = "Collapse ▴"; }
-    view.querySelectorAll("#nbsort [data-s]").forEach((b) => b.addEventListener("click", () => { nbSort = b.dataset.s; renderNotebook(); }));
+    view.querySelectorAll("#nbsort [data-s]").forEach((b) => b.addEventListener("click", () => { nbSort = b.dataset.s; nbSortPicked = true; renderNotebook(); }));
     $("#nbsearch").addEventListener("submit", (e) => {
       e.preventDefault();
       const t = ($("#nbq") ? $("#nbq").value : nbQuery).trim();
@@ -1538,7 +1606,7 @@
       const box = $("#nblist");
       if (!list.length) {
         box.innerHTML = q
-          ? `<div class="empty"><div class="big">🔍</div>No “${esc(q)}」。<div class="row" style="justify-content:center;margin-top:12px"><button class="btn primary" id="nbLookup">Look up “${esc(q)}」</button></div></div>`
+          ? `<div class="empty"><div class="big">🔍</div>No match for “${esc(q)}”.<div class="row" style="justify-content:center;margin-top:12px"><button class="btn primary" id="nbLookup">Look up “${esc(q)}」</button></div></div>`
           : `<div class="empty"><div class="big">📖</div>${nbScene ? "Nothing in this category — press All." : "No words yet. Look one up and save it."}</div>`;
         const nl = $("#nbLookup");
         if (nl) nl.addEventListener("click", () => doLookup(q));
@@ -1559,7 +1627,7 @@
         const tag = w.status === "notfound"
           ? `<span class="mfreq nf">${composed ? "composed" : "not found"}</span>` : freqChip(d.freq, w.word);
         return `<div class="item" data-open="${w.id}">
-          <div style="min-width:0"><div class="w serif">${esc(w.word)} ${tag} <span class="mstat m-${m.key}">${m.cn}</span></div><div class="meta">${esc(d.cn || ((d.meanings || [])[0] && d.meanings[0].definition) || composed || "")}</div></div>
+          <div style="min-width:0"><div class="w serif">${esc(w.word)} ${tag} <span class="mstat m-${m.key}">${m.cn}</span></div><div class="meta">${esc(glossLine(d.cn, (d.meanings || [])[0] && d.meanings[0].pos) || ((d.meanings || [])[0] && d.meanings[0].definition) || composed || "")}</div></div>
           <span class="st chip">${dueIn}</span></div>`;
       }).join("");
       box.querySelectorAll("[data-open]").forEach((n) => n.addEventListener("click", () => openDetail(n.dataset.open)));
@@ -1820,7 +1888,7 @@
     const v = dr.video || (dr.sentence && dr.sentence.video);
     if (!v || !v.url) return "";
     const at = v.at != null ? window.lexisFmtAt(v.at) : "";
-    return `<div class="rv-vid"><a href="${esc(v.url)}" target="_blank" rel="noopener">▸ ${esc(v.title || "the episode")}${at ? " · " + at : ""}</a> <span>— where you heard it</span></div>`;
+    return `<div class="rv-vid"><a href="${esc(v.url)}" target="_blank" rel="noopener">▸ ${esc(vidTitleH5(v.title) || "the episode")}${at ? " · " + at : ""}</a> <span>— where you heard it</span></div>`;
   }
 
   // ---- streak / daily progress -------------------------------------------
@@ -1998,7 +2066,7 @@
       // the box sits IN the gap, not underneath the sentence
       front = `<div class="rv-sent">${esc(dr.pre)}${blank(`style="width:${Math.max(6, (dr.answer || "").length + 2)}ch"`)}${esc(dr.post)}</div>
         ${dr.sentenceCn ? `<div class="muted" style="font-size:13px;margin-top:8px">${esc(dr.sentenceCn)}</div>` : ""}
-        ${d.cn && !dr.sentenceCn ? `<div class="cn-gloss" style="font-size:14px">${esc(d.cn)}</div>` : ""}
+        ${d.cn && !dr.sentenceCn ? `<div class="cn-gloss" style="font-size:14px">${esc(glossLine(d.cn, (d.meanings || [])[0] && d.meanings[0].pos))}</div>` : ""}
         ${videoRefHTML(dr)}
         ${dr.source === "mine" ? `<div class="rv-src">${T.mine}</div>` : dr.source === "context" ? `<div class="rv-src">${T.ctx}</div>` : ""}`;
     } else {
@@ -2012,7 +2080,7 @@
       <div class="hw serif">${esc(w.word)}</div>
       ${d.phonetic ? `<div class="phon">${esc(d.phonetic)}</div>` : ""}
       <button class="speak" id="rspk" style="font-size:26px">🔊</button>
-      ${d.cn ? `<div class="cn-gloss">${esc(d.cn)}</div>` : ""}
+      ${d.cn ? `<div class="cn-gloss">${esc(glossLine(d.cn, (d.meanings || [])[0] && d.meanings[0].pos))}</div>` : ""}
       ${(d.meanings || []).slice(0, 2).map((m) => `<div class="mean" style="text-align:left">${m.pos ? `<span class="pos">${esc(m.pos)}</span> ` : ""}${esc(m.definition)}${m.cn ? `<div class="cn">${esc(m.cn)}</div>` : ""}</div>`).join("")}
       ${full ? `<div class="ex" style="text-align:left">${hi(full)}${(dr.sentenceCn || (dr.sentence && dr.sentence.cn)) ? `<div class="tr">${esc(dr.sentenceCn || dr.sentence.cn)}</div>` : ""}</div>${videoRefHTML(dr)}` : ""}`;
 
@@ -2139,7 +2207,29 @@
   let dTab = "words", dCursor = { words: 0, phrases: 0, pv: 0 };
   let vidOpen = null;          // episode id being viewed
   let vidTab = "vocab";        // vocab | script
+  // Hear one line without leaving the page. A YouTube embed takes `start` and
+  // `end` in the URL, so "play this sentence and stop" needs no API and no key.
+  // Built only once you ask for a line — the same rule as the extension.
+  let vidPlay = null;          // { id, from, to, n } — n forces a reload on replay
+  function vidEmbedIdH5(url) {
+    const m = String(url || "").match(/[?&]v=([A-Za-z0-9_-]{6,})/);
+    return m ? m[1] : "";
+  }
+  function vidLineEndH5(full, t) {
+    const ls = (full && full.lines) || [];
+    for (let i = 0; i < ls.length; i++) if (ls[i].t > t + 0.4) return Math.ceil(ls[i].t);
+    return Math.ceil(t) + 12;
+  }
+  function vidPlayerH5(id) {
+    if (!vidPlay || vidPlay.id !== id) return "";
+    const q = `start=${vidPlay.from}&end=${vidPlay.to}&autoplay=1&rel=0&modestbranding=1&_=${vidPlay.n}`;
+    return `<div class="vplayer"><iframe src="https://www.youtube.com/embed/${esc(id)}?${q}"
+        allow="autoplay" referrerpolicy="strict-origin-when-cross-origin"></iframe>
+      <div class="vplayer-x"><span>${fmtSecH5(vidPlay.from)} – ${fmtSecH5(vidPlay.to)}</span>
+        <button class="btn" id="vidStop">Close</button></div></div>`;
+  }
   let vidFilter = "new";       // new | learning | mastered | all
+  let vidBand = "";            // "" | r1..r4 | r0 | ck — set by tapping the legend
   let vidSel = new Set();      // words ticked for the notebook
   const vidFull = {};          // id → the full record, fetched on demand, memory only
   const vidLoad = {};          // id → "loading" | "fail" — a spinner that never stops is a lie
@@ -2237,14 +2327,42 @@
   // ≈ overall rank 2500 + i, so an estimate of 14k means the whole pool is below
   // them — in that case there is nothing useful left to recommend by frequency and
   // the honest move is to say so and push them toward phrases/idioms.
-  function levelWindow(poolLen) {
+  // ONE number for "my level", shared by this pool and by what a saved article
+  // or episode shows. A manual setting wins — you know your own level better
+  // than one passage does — then the reading assessment, then nothing. `src`
+  // matters because the note has to say WHICH of those you are reading: a number
+  // you typed and a number that was measured are not the same claim.
+  function levelInfo() {
     const a = getAssess();
     const est = bestEstimate();
-    const v = est ? est.estVocab : a.estVocab || 0;
-    if (!v) return { mode: "none", estVocab: 0 };
+    const measured = est ? est.estVocab : a.estVocab || 0;
+    // THE BOX IS THE LEVEL. The assessment is reference, not an override — it
+    // measures what you RECOGNISE, and that is reliably far above what you can
+    // USE, which is what this number is for. Same rule as the extension.
+    const st = getSettings();
+    const chosen = Number(st.vocabLevel) || 0;
+    if (chosen > 0) return { v: chosen, src: st.vocabLevelSet ? "manual" : "default", measured };
+    if (measured) return { v: measured, src: "assess", measured };
+    return { v: 0, src: "none", measured: 0 };
+  }
+  // Same fallback the extension's marking engines use, so the two surfaces hide
+  // and show exactly the same words in a synced snapshot.
+  function effLevel() { return levelInfo().v || 6000; }
+
+  function levelWindow(poolLen) {
+    const info = levelInfo();
+    const v = info.v;
+    const tail = { src: info.src, measured: info.measured };
+    // "Not calibrated" = you have neither typed a level nor been measured. The
+    // shipped 6,000 is fine to MARK against but is not a claim about you, so the
+    // study list must not start 3,500 words in for someone who never said
+    // anything (CLAUDE.md §8) — that still holds now that the box outranks the
+    // assessment everywhere else.
+    const uncalibrated = !getSettings().vocabLevelSet && !info.measured;
+    if (!v || uncalibrated) return { mode: "none", estVocab: 0, ...tail };
     const startIdx = Math.max(0, Math.round(v - 2500));
-    if (poolLen - startIdx < 250) return { mode: "beyond", estVocab: v, startIdx: 0, left: Math.max(0, poolLen - startIdx) };
-    return { mode: "above", estVocab: v, startIdx, left: poolLen - startIdx };
+    if (poolLen - startIdx < 250) return { mode: "beyond", estVocab: v, startIdx: 0, left: Math.max(0, poolLen - startIdx), ...tail };
+    return { mode: "above", estVocab: v, startIdx, left: poolLen - startIdx, ...tail };
   }
 
   // how far into a chunk pool the 摸底 says we can skip (0 when never assessed)
@@ -2293,7 +2411,7 @@
     const rules = window.LEXIS_PTYPE_RULE || [];
     const cn = window.LEXIS_PTYPE_CN || {};
     if (!rules.length) return "";
-    return `<details class="kind-rule"><summary>How are these decided??</summary>
+    return `<details class="kind-rule"><summary>How are these grouped?</summary>
       <div class="kr-body">
         <p class="kr-lead">Tagged automatically on save; <b>rules run top to bottom and the first match wins</b>,so every entry lands in exactly one bucket, never two.</p>
         <div class="kr-l1"><b>Word</b> = no space ·  <b>Phrasal verbs</b> = rule 2 below ·  <b>Fixed expressions</b> = everything else</div>
@@ -2313,13 +2431,21 @@
     // calibration the list simply starts at the top of an 8k frequency pool,
     // i.e. the commonest words in English, which is why it looks too easy.
     if (lvl.mode === "none")
-      s2 += `<br><b>Not calibrated yet</b> — this list starts at the very top of the 8,000-word frequency pool, which is why it looks easy. One <button class="linklike" id="dCal">reading assessment</button> (~2 min; a passage judges 60–100 words at once) sets your level and Discover jumps to it — no ticking words one by one.`;
+      s2 += `<br><b>No level set</b> — this list starts at the very top of the 8,000-word frequency pool, which is why it looks easy. Type one below, or take one <button class="linklike" id="dCal">reading assessment</button> (~2 min; a passage judges 60–100 words at once) and it measures one for you.`;
     else if (lvl.mode === "beyond")
-      s2 += `<br>Your estimated vocabulary  <b>${lvl.estVocab.toLocaleString()}</b> <b>already exceeds this 8k pool</b>, so it now leads with <b>rarest first</b>. Your real headroom is in  <b>Phrases</b> and <b>Idioms</b>.`;
+      s2 += `<br>Your <b>${lvl.estVocab.toLocaleString()}</b> <b>already exceeds this 8k pool</b>, so it now leads with <b>rarest first</b>. Your real headroom is in <b>Phrasal verbs</b> and <b>Fixed expressions</b>.`;
     else if (lvl.mode === "above")
-      s2 += `<br>Skipping everything below your level; starting around <b>≈${lvl.estVocab.toLocaleString()}</b> — ${lvl.left.toLocaleString()} left.`;
-    if (w) s2 += `<br>and leads with ${w.map((k) => FREQ_CN[k] || k).join(" › ")}」——your weakest bands in the assessment.`;
-    return s2;
+      s2 += `<br>Starting around <b>≈${lvl.estVocab.toLocaleString()}</b> — ${lvl.left.toLocaleString()} left. ${
+        lvl.src === "manual"
+          ? `That is the level you <b>set</b>${lvl.measured ? `, not the ${lvl.measured.toLocaleString()} your reading assessment measured` : ", not a measured one"}.`
+          : "Measured by your reading assessment."} Lower it to pull commoner words back in.`;
+    if (w) s2 += `<br>Weakest bands first: ${w.map((k) => FREQ_CN[k] || k).join(" › ")}.`;
+    // The knob belongs where its effect is visible, not on the Me tab — the same
+    // reason the extension carries one in Discover and on every library page.
+    // It is the SAME setting: one number, both surfaces.
+    return s2 + `<br><span class="lvl-set">My vocabulary size
+        <input class="num" type="number" min="0" max="40000" step="500" inputmode="numeric" value="${Number(getSettings().vocabLevel) || 0}" id="dLvl"/>
+        <span class="muted">0 = use my assessment. Also decides which words a saved article or episode shows.</span></span>`;
   }
 
   // ---- My library · Videos ------------------------------------------------
@@ -2350,37 +2476,72 @@
   const VID_BANDS = [
     { k: "r1", label: "Top 10k" }, { k: "r2", label: "10–15k" }, { k: "r3", label: "15–20k" },
     { k: "r4", label: "20k+" }, { k: "r0", label: "unranked" }, { k: "ck", label: "Phrases" },
+    { k: "vp", label: "Verb patterns" },
   ];
-  // a phrase is ranked among phrases, so it never gets filed under a word band
-  const vidBandKey = (w) => (w && w.c) ? "ck"
+  // a phrase is ranked among phrases, so it never gets filed under a word band —
+  // and a verb pattern is on no frequency list at all
+  const vidBandKey = (w) => (w && w.p) ? "vp" : (w && w.c) ? "ck"
     : (!w || !w.r) ? "r0" : w.r <= 10000 ? "r1" : w.r <= 15000 ? "r2" : w.r <= 20000 ? "r3" : "r4";
 
+  // What this snapshot holds AT YOUR CURRENT LEVEL. The record keeps everything
+  // down to a floor, so changing your level re-answers the question for material
+  // saved months ago instead of freezing the answer at the level you happened to
+  // hold the day it was recorded.
+  function vidSnap(v) {
+    return (typeof window.lexisSnapWords === "function")
+      ? window.lexisSnapWords((v && v.words) || [], effLevel()) : ((v && v.words) || []);
+  }
+
+  let libFilter = "all";      // all | page | video — which kind of material
+  function hostOfH5(u) { try { return new URL(u).hostname.replace(/^www\./, ""); } catch (e) { return ""; } }
   function renderLibrary() {
     const idx = videoIdx();
     const ids = Object.keys(idx).sort((a, b) => (idx[b].u || 0) - (idx[a].u || 0));
     if (!ids.length) {
       return `<div class="empty">
-          <div class="big">📺</div>
-          <h3>No episodes yet</h3>
-          <p class="muted">Save an episode from the YouTube sidebar on your Mac and it turns up here —
-             its vocabulary, and the transcript to re-read.</p>
+          <div class="big">📚</div>
+          <h3>Nothing saved yet</h3>
+          <p class="muted">On your Mac: save an <b>article</b> from the LEXIS tab on the page edge,
+             or an <b>episode</b> from the YouTube sidebar. Either turns up here — its vocabulary,
+             and the full text with Chinese to re-read.</p>
           <button class="btn" data-dsec="vocab">Study word lists instead →</button>
         </div>`;
     }
-    return ids.map((id) => {
+    // an article is scrolled and an episode is played — the library says which
+    // on every card, and lets you ask for one kind. A kind you own nothing of
+    // is not offered: a filter that can only produce an empty list isn't one.
+    const nPage = ids.filter((x) => (idx[x] || {}).kind === "page").length;
+    const nVid = ids.length - nPage;
+    if ((libFilter === "page" && !nPage) || (libFilter === "video" && !nVid)) libFilter = "all";
+    const shown = libFilter === "all" ? ids
+      : ids.filter((x) => (((idx[x] || {}).kind === "page")) === (libFilter === "page"));
+    const lchip = (k, label, n) => n
+      ? `<button class="catf${libFilter === k ? " on" : ""}" data-lf="${k}">${esc(label)} <b>${n}</b></button>` : "";
+    const bar = (nPage && nVid)
+      ? `<div class="chips" style="margin-bottom:8px">${lchip("all", "All", ids.length)}${lchip("page", "Articles", nPage)}${lchip("video", "Videos", nVid)}</div>`
+      : "";
+    return bar + shown.map((id) => {
       const v = idx[id];
-      const ws = v.words || [];
+      const ws = vidSnap(v);
       const fresh = ws.filter((w) => vidWordState(w.k || w.w) === "new");
       const by = {};
       fresh.forEach((w) => { const k = vidBandKey(w); by[k] = (by[k] || 0) + 1; });
       const bars = VID_BANDS.filter((b) => by[b.k]).map((b) =>
         `<span class="vbit"><i class="bsw ${b.k}"></i>${by[b.k]} ${esc(b.label)}</span>`).join("");
-      return `<div class="vcard" data-vid="${esc(id)}">
-          <img src="https://i.ytimg.com/vi/${esc(id)}/mqdefault.jpg" alt="" loading="lazy"/>
+      const isPage = v.kind === "page";
+      // the article's own picture sits OVER the paper card, so a refused
+      // hotlink falls back to the paper design instead of a broken image box
+      const thumb = isPage
+        ? `<div class="vpaper"><span>${esc(v.site || hostOfH5(v.url) || "article")}</span>` +
+          (v.img ? `<img class="vshot" src="${esc(v.img)}" alt="" loading="lazy" onerror="this.remove()"/>` : "") +
+          `<i class="vkind">Article</i></div>`
+        : `<div class="vpaper vthumb"><img src="https://i.ytimg.com/vi/${esc(id)}/mqdefault.jpg" alt="" loading="lazy"/><i class="vkind">Video</i></div>`;
+      return `<div class="vcard${isPage ? " page" : ""}" data-vid="${esc(id)}">
+          ${thumb}
           <div class="vc-b">
             <div class="vc-t">${esc(v.t || id)}</div>
             <div class="vc-n">${fresh.length ? `<b>${fresh.length}</b> to learn` : "all learned"}${v.partial ? " · not downloaded yet" : ""}</div>
-            ${bars ? `<div class="vc-bars">${bars}</div>` : ""}
+            ${bars ? `<div class="vc-cap">by how common they are</div><div class="vc-bars">${bars}</div>` : ""}
           </div>
         </div>`;
     }).join("");
@@ -2424,14 +2585,142 @@
       : " set up cloud sync in Me · ⚙️ first; the transcript lives in the gist, not on this phone."}</p>`;
   }
 
+  // ONE swatch row for both tabs, and it is the filter: in Vocabulary it
+  // narrows the list, in Transcript it decides which marks are drawn. Same
+  // shape as the extension's episode page and the subtitle sidebar.
+  const vidTitleH5 = (t, id) => (typeof window.lexisCleanTitle === "function"
+    ? window.lexisCleanTitle(t || "", "YouTube") : (t || "")) || id || "";
+  function vidLegendH5(rows) {
+    // counts describe the tab you are on, and All is an explicit way back —
+    // clearing a filter by tapping the active chip again is not discoverable
+    const scope = rows.filter((x) =>
+      vidFilter === "all" ? true
+      : vidFilter === "learning" ? x.st === "learning"
+      : vidFilter === "mastered" ? x.st === "mastered"
+      : x.st !== "learning" && x.st !== "mastered");
+    const counts = {};
+    scope.forEach((x) => { const k = vidBandKey(x); counts[k] = (counts[k] || 0) + 1; });
+    const nL = rows.filter((x) => x.st === "learning").length;
+    const nM = rows.filter((x) => x.st === "mastered").length;
+    const sw = (key, label, n, on) =>
+      n ? `<button class="vb ${key} clk${on ? " on" : ""}" data-vband="${key}"><i></i>${esc(label)} <b>${n}</b></button>`
+        : `<span class="vb ${key} nil" title="none in this view"><i></i>${esc(label)} <b>0</b></span>`;
+    const st = (key, label, n, tab) =>
+      n ? `<button class="vb ${key} clk${vidFilter === tab ? " on" : ""}" data-vf="${tab}"><i></i>${esc(label)} <b>${n}</b></button>`
+        : `<span class="vb ${key} nil" title="none in this episode"><i></i>${esc(label)} <b>0</b></span>`;
+    return `<div class="vlegend">
+        <button class="vb all clk${vidBand ? "" : " on"}" data-vband="__all__" title="Every bucket — clears the band, not the filter above">All bands <b>${scope.length}</b></button>
+        ${sw("r1", "Top 10k", counts.r1 || 0, vidBand === "r1")}
+        ${sw("r2", "10–15k", counts.r2 || 0, vidBand === "r2")}
+        ${sw("r3", "15–20k", counts.r3 || 0, vidBand === "r3")}
+        ${sw("r4", "20k+", counts.r4 || 0, vidBand === "r4")}
+        ${sw("r0", "unranked", counts.r0 || 0, vidBand === "r0")}
+        ${sw("ck", "phrase", counts.ck || 0, vidBand === "ck")}
+        ${sw("vp", "pattern", counts.vp || 0, vidBand === "vp")}
+        ${st("nb", "learning", nL, "learning")}
+        ${st("mastered", "mastered", nM, "mastered")}
+        ${(() => {
+          // The box has to show the number IN FORCE. settings.vocabLevel and
+          // effLevel() are the same only once you have set a level by hand:
+          // assess and never touch it, and the list filters at your measured
+          // size while the control says 6,000 — every band under your real
+          // level then reads 0 and looks broken.
+          const info = levelInfo();
+          const why = info.src === "manual" ? "You set this."
+            : info.src === "default" ? "The default. This box wins over the assessment on purpose: the test measures what you RECOGNISE, this is what you can use."
+            : info.src === "assess" ? `From your assessment (≈${info.measured.toLocaleString()}) because this box is empty. Type a number to take it back.`
+            : "Nothing set or measured yet.";
+          return `<span class="lvl-set sm" title="Words ranked inside this count as already yours and are left out. ${esc(why)}">lvl <input class="num" type="number" min="0" max="40000" step="500" inputmode="numeric" id="vLvl" value="${effLevel()}"/></span>`;
+        })()}
+      </div>`;
+  }
+  function vidMarkOn(x) {
+    if (vidBand && vidBandKey(x) !== vidBand) return false;
+    if (vidFilter === "learning" && x.st !== "learning") return false;
+    if (vidFilter === "mastered" && x.st !== "mastered") return false;
+    if (vidFilter === "new" && (x.st === "learning" || x.st === "mastered")) return false;
+    return true;
+  }
+  // Phrases and patterns are DERIVED at render, not read out of the snapshot —
+  // the legend counted `words` rows while the transcript marked them by running
+  // the matcher, so an old recording underlined `give rise to` in green and the
+  // legend right above it said "phrase 0" and would not be clicked. Same engine,
+  // one answer. See the extension's vidDerivedUnits() for the long version.
+  // The sentence a derived row carries — the SENTENCE, not the whole line.
+  // A transcript line often runs two sentences together ("…a vast emptiness.
+  // Out of this endless"), and handing the whole line back is the same defect
+  // the sidebar had: a context box holding one sentence you wanted and one you
+  // didn't. Same rule as contextOf() in the sidebar — the sentence the match
+  // sits in, and the next line only when that sentence is genuinely unfinished.
+  const _VS_END = /[.!?。！？]["'\)\]]?\s*$/;
+  function vidSentenceAt(lines, i, off) {
+    var g = function (k) { return (lines[k] || {}).x || ""; };
+    if (typeof window.lexisSentenceAt === "function") return window.lexisSentenceAt(g(i), off, g(i - 1), g(i + 1));
+    return String(g(i)).replace(/\s+/g, " ").trim().slice(0, 300);
+  }
+
+  const _vidUnits = {};
+  function vidDerivedUnits(v) {
+    if (!v || !v.lines) return [];
+    const key = (v.id || "") + ":" + v.lines.length + ":" + (v.updatedAt || 0);
+    if (_vidUnits[key]) return _vidUnits[key];
+    const out = [], seen = {};
+    if (typeof window.lexisFindUnits === "function" && typeof window.lexisPassageTokens === "function") {
+      const lines = v.lines;
+      lines.forEach((l, i) => {
+        const toks = window.lexisPassageTokens(l.x || "");
+        const lw = [], off = [];
+        let at = 0;
+        toks.forEach((t) => { if (t.word) { lw.push(t.key || t.text.toLowerCase()); off.push(at); } at += t.text.length; });
+        if (lw.length < 2) return;
+        let u;
+        try { u = window.lexisFindUnits(lw); } catch (e) { return; }
+        (u.chunks || []).forEach((c) => {
+          if (typeof window.lexisChunkWorthMarking === "function" && !window.lexisChunkWorthMarking(c.term)) return;
+          if (seen[c.term]) return;
+          seen[c.term] = 1;
+          out.push({ w: c.term, k: c.term, r: c.rank || null, c: 1, p: 0, cn: "",
+                     s: vidSentenceAt(lines, i, off[c.i] || 0), at: l.t || 0 });
+        });
+        (u.vpats || []).forEach((vp) => {
+          const k = vp.term.toLowerCase();
+          if (seen[k]) return;
+          seen[k] = 1;
+          out.push({ w: vp.term, k: k, r: null, c: 0, p: 1, cn: vp.cn || "",
+                     s: vidSentenceAt(lines, i, off[vp.i] || 0), at: l.t || 0 });
+        });
+      });
+    }
+    _vidUnits[key] = out;
+    return out;
+  }
   function renderVideoDetail() {
     const id = vidOpen, light = videoIdx()[id] || {};
     const full = vidFull[id];
-    const words = (full && full.words) || light.words || [];
-    const rows = words.map((w) => ({
+    // an article and an episode are the same record; only the words for it differ
+    const isPage = (light.kind || (full && full.kind)) === "page";
+    const rec = { words: (full && full.words) || light.words || [], lvl: (full && full.lvl) || light.lvl || 0 };
+    const words = vidSnap(rec);
+    const rows0 = words.map((w) => ({
       w: w.w, k: w.k || norm(w.w), r: w.r || null, c: w.c ? 1 : 0,
+      // `p` = a verb pattern; it brings its own Chinese, because no dictionary
+      // has an entry for "conceal sth from sb" to go and ask
+      p: w.p ? 1 : 0, cn: w.cn || "",
       s: w.s || "", at: w.at || 0, st: vidWordState(w.k || w.w),
     }));
+    // anything the transcript marks but the snapshot never recorded
+    const have = {};
+    rows0.forEach((x) => { have[x.k] = 1; });
+    vidDerivedUnits(full).forEach((d) => {
+      if (have[d.k]) return;
+      have[d.k] = 1;
+      rows0.push({ ...d, st: vidWordState(d.k) });
+    });
+    // one family, one row — the same fold as the extension, from vocab.js
+    const rows = (typeof window.lexisFoldFamilies === "function")
+      ? window.lexisFoldFamilies(rows0.map((x) => ({ ...x, term: x.w, rank: x.r, sentence: x.s, start: x.at })))
+          .map((x) => ({ ...x, w: x.term, r: x.rank, s: x.sentence, at: x.start }))
+      : rows0;
     const by = {
       new: rows.filter((x) => x.st === "new"), learning: rows.filter((x) => x.st === "learning"),
       mastered: rows.filter((x) => x.st === "mastered"), all: rows,
@@ -2440,49 +2729,122 @@
     const head = `
       <div class="row" style="margin-bottom:10px">
         <button class="btn" id="vidBack">← Library</button>
-        <a class="btn" href="${esc(light.url || full && full.url || "")}" target="_blank" rel="noopener">Watch ↗</a>
+        <a class="btn" href="${esc(light.url || full && full.url || "")}" target="_blank" rel="noopener">${isPage ? "Read ↗" : "Watch ↗"}</a>
       </div>
-      <h2 class="serif" style="margin:0 0 2px;font-size:20px">${esc(light.t || (full && full.title) || id)}</h2>
-      <div class="muted" style="font-size:12px;margin-bottom:10px">${rows.length} words · <b>${by.new.length}</b> not learned yet${full ? ` · ${(full.lines || []).length} lines` : ""}</div>
+      <h2 class="serif" style="margin:0 0 2px;font-size:20px">${esc(vidTitleH5(light.t || (full && full.title), id))}</h2>
+      <div class="muted" style="font-size:12px;margin-bottom:10px">${isPage && (light.site || hostOfH5(light.url)) ? esc(light.site || hostOfH5(light.url)) + " · " : ""}${rows.length} words · <b>${by.new.length}</b> not learned yet${full ? ` · ${(full.lines || []).length} ${isPage ? "paragraphs" : "lines"}` : ""}</div>
+      ${(() => {
+        // A snapshot can only show what it wrote down. Recorded while your level
+        // was higher than it is now, the commoner words are missing from the
+        // FILE, not from this page — no amount of turning the knob brings them
+        // back, and only re-saving on the Mac does. Say so, rather than letting
+        // a short list read as "this had nothing easy in it".
+        const floor = (typeof window.lexisSnapFloor === "function") ? window.lexisSnapFloor(rec) : 0;
+        const cur = effLevel();
+        return floor && floor > cur + 200
+          ? `<div class="vfloor">Recorded at a level of ≈<b>${Number(floor).toLocaleString()}</b> — words commoner than that were never written into this snapshot, so your level of ${cur.toLocaleString()} can't pull them back. Re-save it on the Mac to pick them up.</div>`
+          : "";
+      })()}
+      ${vidPlayerH5(vidEmbedIdH5(light.url || (full && full.url)))}
       <div class="subtabs" id="vtabs">
         <button data-vt="vocab" class="${vidTab === "vocab" ? "on" : ""}">Vocabulary</button>
-        <button data-vt="script" class="${vidTab === "script" ? "on" : ""}">Transcript</button>
+        <button data-vt="script" class="${vidTab === "script" ? "on" : ""}">${isPage ? "Text" : "Transcript"}</button>
       </div>`;
 
     if (vidTab === "script") {
       if (!full) return head + `<div class="empty">${vidWaitNote(id, "the transcript")}</div>`;
       const byKey = {}; rows.forEach((x) => { byKey[x.k] = x; });
-      const lines = (full.lines || []).map((l) => {
+      const lines = (full.lines || []).map((l, i) => {
         const toks = (typeof window.lexisPassageTokens === "function")
           ? window.lexisPassageTokens(l.x) : [{ text: l.x, word: false }];
         const at = [], lw = [];
         toks.forEach((t, j) => { if (t.word) { at.push(j); lw.push(t.key || t.text.toLowerCase()); } });
         const opens = {}, closes = {};
-        if (typeof window.lexisFindChunks === "function" && lw.length > 1) {
-          try { (window.lexisFindChunks(lw) || []).forEach((c) => { opens[at[c.i]] = c; closes[at[c.i + c.len - 1]] = true; }); } catch (e) {}
+        if (typeof window.lexisFindUnits === "function" && lw.length > 1) {
+          // same exclusion as every other surface — grammar frames are not vocabulary
+          try {
+            const u = window.lexisFindUnits(lw) || { chunks: [], vpats: [] };
+            (u.chunks || [])
+              .filter((c) => typeof window.lexisChunkWorthMarking !== "function" || window.lexisChunkWorthMarking(c.term))
+              .forEach((c) => { opens[at[c.i]] = c; closes[at[c.i + c.len - 1]] = true; });
+            // a pattern marks its two ANCHORS only — the words in between belong
+            // to the sentence, not to the pattern
+            (u.vpats || []).forEach((vp) => {
+              const jv = at[vp.i], p0 = at[vp.j], p1 = at[vp.j + vp.plen - 1];
+              if (opens[jv] === undefined && closes[jv] === undefined) { opens[jv] = { vp, len: 1 }; closes[jv] = true; }
+              if (opens[p0] === undefined && closes[p1] === undefined) { opens[p0] = { vp, len: p1 - p0 + 1 }; closes[p1] = true; }
+            });
+          } catch (e) {}
         }
+        // Tapping a word looks it up — reading a transcript IS looking words
+        // up. A word inside a marked phrase carries no tap target of its own so
+        // the tap lands on the PHRASE: "call" does not answer "call out".
+        let inChunk = 0;
         const en = toks.map((t, j) => {
           const c = opens[j];
-          const cs = c ? vidWordState(c.term) : "";
-          const pre = c ? `<c class="ck${cs === "learning" ? " nb" : cs === "mastered" ? " mastered" : ""}" title="${esc(c.term)}">` : "";
+          const cTerm = c ? (c.vp ? c.vp.term : c.term) : "";
+          const cs = c ? vidWordState(cTerm) : "";
+          const ckOn = c ? vidMarkOn(c.vp ? { p: 1, st: cs } : { c: 1, r: c.rank || null, st: cs }) : false;
+          const pre = c
+            ? `<c class="${c.vp ? "vp" : "ck"}${ckOn ? "" : " off"}${cs === "learning" ? " nb" : cs === "mastered" ? " mastered" : ""}" data-vlook="${esc(cTerm)}" title="${esc(cTerm)}${c.vp ? " · " + esc(c.vp.cn) : ""}">`
+            : "";
+          if (c) inChunk = c.len;
           const post = closes[j] ? "</c>" : "";
-          if (!t.word) return pre + esc(t.text) + post;
+          // clear the flag AFTER this token is built — clearing it on the
+          // closing token gave the phrase's LAST word a tap target of its own,
+          // and being the inner element it swallowed the phrase's tap
+          const endsChunk = !!closes[j];
+          if (!t.word) { if (endsChunk) inChunk = 0; return pre + esc(t.text) + post; }
+          const term = (t.text.match(/[A-Za-z][A-Za-z'-]*/) || [t.text])[0];
           const hit = byKey[(t.key || t.text.toLowerCase())];
-          if (!hit) return pre + esc(t.text) + post;
-          const cls = hit.st === "learning" ? "nb" : hit.st === "mastered" ? "mastered" : vidBandKey(hit);
-          return pre + `<w class="${cls}" title="${esc(hit.w)}">${esc(t.text)}</w>` + post;
+          const cls = (hit && vidMarkOn(hit)) ? (hit.st === "learning" ? "nb" : hit.st === "mastered" ? "mastered" : vidBandKey(hit)) : "";
+          const link = inChunk ? "" : ` data-vlook="${esc(term)}"`;
+          const html = pre + `<w class="${cls}"${link} title="${esc(hit ? hit.w : term)}">${esc(t.text)}</w>` + post;
+          if (endsChunk) inChunk = 0;
+          return html;
         }).join("");
+        // a paragraph has no second to jump to — the gutter carries its number
+        // rather than a link that would go nowhere
         return `<div class="vline">
-            <a href="${esc(full.url)}&t=${Math.max(0, Math.floor(l.t || 0))}s" target="_blank" rel="noopener">${fmtSecH5(l.t)}</a>
+            ${isPage
+              ? `<span class="vl-n">${i + 1}</span>`
+              : vidEmbedIdH5(full.url)
+                ? `<button class="vl-t" data-vplay="${Math.max(0, Math.floor(l.t || 0))}">${fmtSecH5(l.t)}</button>`
+                : `<a href="${esc(full.url)}&t=${Math.max(0, Math.floor(l.t || 0))}s" target="_blank" rel="noopener">${fmtSecH5(l.t)}</a>`}
             <div><div>${en}</div>${l.z ? `<div class="vl-zh">${esc(l.z)}</div>` : ""}</div>
           </div>`;
       }).join("");
-      return head + `<div class="vscript">${lines || "<p class='muted'>No transcript was recorded.</p>"}</div>`;
+      return head + vidLegendH5(rows) + `<div class="vscript">${lines || "<p class='muted'>No transcript was recorded.</p>"}</div>`;
     }
 
+    // The Chinese for a row's sentence is already on file — the transcript pass
+    // paid for it and it rides the sync in `lines[].z`. It was simply never
+    // shown here, so the extension's list had a bilingual column and this one
+    // didn't. Matching is by CONTAINMENT, not by exact text: an episode row
+    // holds one sentence cut out of its caption line, an article row one cut
+    // out of its paragraph, so the line's own text is never equal to it.
+    const zhSeen = {}, sentSeen = {};
+    // re-cut a sentence a pre-fix snapshot stored as a fragment — see lexisSnapSentence
+    const sentOfRow = (x) => {
+      const k = x.s + "\u0000" + x.at;
+      if (sentSeen[k] !== undefined) return sentSeen[k];
+      const out = (typeof window.lexisSnapSentence === "function")
+        ? window.lexisSnapSentence((full && full.lines) || [], x.s, x.at) : x.s;
+      sentSeen[k] = out;
+      return out;
+    };
+    const zhOf = (sent, at) => {
+      const k = sent + "\u0000" + at;
+      if (zhSeen[k] !== undefined) return zhSeen[k];
+      const hit = (typeof window.lexisSnapZh === "function")
+        ? window.lexisSnapZh((full && full.lines) || [], sent, at) : "";
+      zhSeen[k] = hit;
+      return hit;
+    };
     const chip = (k, label, n) => `<button class="catf${vidFilter === k ? " on" : ""}" data-vf="${k}">${esc(label)} <b>${n}</b></button>`;
-    const list = by[vidFilter].slice().sort((a, b) =>
-      (a.c ? 1 : 0) - (b.c ? 1 : 0) || (a.r || 999999) - (b.r || 999999));
+    let list = by[vidFilter].slice().sort((a, b) =>
+      (a.p ? 2 : a.c ? 1 : 0) - (b.p ? 2 : b.c ? 1 : 0) || (a.r || 999999) - (b.r || 999999));
+    if (vidBand) list = list.filter((x) => vidBandKey(x) === vidBand);
     let out = "", lastBand = "";
     list.forEach((x) => {
       const b = vidBandKey(x);
@@ -2495,23 +2857,45 @@
       const tag = x.st === "learning" ? `<span class="chip">learning</span>`
                 : x.st === "mastered" ? `<span class="chip">mastered</span>` : "";
       out += `<label class="vrow${x.st === "new" ? "" : " done"}">
-          <input type="checkbox" data-vpick="${esc(x.k)}" ${x.st === "new" ? "" : "disabled"} ${vidSel.has(x.k) ? "checked" : ""}/>
+          <input type="checkbox" data-vpick="${esc(x.k)}" ${vidSel.has(x.k) ? "checked" : ""}/>
           <div>
-            <div><span class="serif" style="font-size:16px">${esc(x.w)}</span>
-              <span class="vr">${x.c ? (x.r ? "phrase #" + x.r.toLocaleString("en-US") : "taught chunk") : (x.r ? "#" + x.r.toLocaleString("en-US") : "—")}</span>${tag}</div>
-            ${x.s ? `<div class="vs">${esc(x.s)}</div>` : ""}
+            <div><span class="serif" style="font-size:16px">${esc(x.w)}</span>${(x.forms || []).length ? `<span class="vr">also ${esc(x.forms.join(" / "))}</span>` : ""}
+              <span class="vr">${x.p ? "verb pattern" : x.c ? (x.r ? "phrase #" + x.r.toLocaleString("en-US") : "taught chunk") : (x.r ? "#" + x.r.toLocaleString("en-US") : "—")}</span>${tag}</div>
+            ${x.p && x.cn ? `<div class="vcn">${esc(x.cn)}</div>` : ""}
+            ${x.s ? (() => {
+              const id = vidEmbedIdH5(light.url || (full && full.url));
+              const sx = sentOfRow(x), z = zhOf(sx, x.at);
+              return `<div class="vs">${id ? `<button class="vl-t vs-go" data-vplay="${Math.max(0, Math.floor(x.at || 0))}" title="Hear this line">▸</button> ` : ""}${esc(sx)}${z ? `<div class="vsz">${esc(z)}</div>` : ""}</div>`;
+            })() : ""}
           </div>
         </label>`;
     });
     return head + `
+      ${vidLegendH5(rows)}
       <div class="catbar">${chip("new", "Not learned", by.new.length)}${chip("learning", "Learning", by.learning.length)}${chip("mastered", "Mastered", by.mastered.length)}${chip("all", "All", by.all.length)}</div>
       ${full ? "" : vidWaitNote(id, "the sentences")}
       <div>${out || "<p class='muted'>Nothing in this group.</p>"}</div>
-      ${by.new.length ? `<div class="vact">
-        <button class="btn" id="vidAll">Select all not-learned</button>
-        <button class="btn" id="vidNone">Clear</button>
-        <button class="btn sage" id="vidAdd" ${vidSel.size ? "" : "disabled"}>＋ Add ${vidSel.size}</button>
-      </div>` : ""}`;
+      ${(() => {
+        // Marking known used to be one-way: the row's checkbox went disabled and,
+        // once nothing was left "new", the whole bar stopped rendering — so a
+        // list you had marked through had no control left to take it back with.
+        // Counts are split because ticking a mastered row means something
+        // different from ticking a new one.
+        // three different selections, three counts: "Add" only applies to a word
+        // that is not an entry yet, "Mark known" to anything not already
+        // mastered, "Don't know after all" is the way back from mastered
+        const selAdd = rows.filter((x) => x.st === "new" && vidSel.has(x.k)).length;
+        const selNew = rows.filter((x) => x.st !== "mastered" && vidSel.has(x.k)).length;
+        const selMas = rows.filter((x) => x.st === "mastered" && vidSel.has(x.k)).length;
+        if (!rows.length) return "";
+        return `<div class="vact">
+          ${by.new.length ? `<button class="btn" id="vidAll">Select all</button>` : ""}
+          <button class="btn" id="vidNone">Clear</button>
+          <button class="btn" id="vidUnknown" style="${selMas ? "" : "display:none"}" title="Put these back in the recommendations and take them out of your vocabulary size">Don't know ${selMas} after all</button>
+          <button class="btn" id="vidKnown" ${selNew ? "" : "disabled"} title="I already know these — stop recommending them and let them count towards your vocabulary size">Mark ${selNew} known</button>
+          <button class="btn sage" id="vidAdd" ${selAdd ? "" : "disabled"}>＋ Add ${selAdd}</button>
+        </div>`;
+      })()}`;
   }
   function fmtSecH5(t) {
     t = Math.max(0, Math.floor(t || 0));
@@ -2541,6 +2925,18 @@
     view.querySelectorAll("#dtabs button").forEach((b) => b.addEventListener("click", () => { dTab = b.dataset.d; renderDiscover(); }));
     bindSectionSwitch();
     if ($("#dCal")) $("#dCal").addEventListener("click", () => renderReadingPick());
+    // `change`, not `input`: on a phone every keystroke would repaint the list
+    // under your thumb while you are still typing the number
+    if ($("#dLvl")) $("#dLvl").addEventListener("change", (e) => {
+      const s = getSettings();
+      // settings deliberately never ride the gist (it would carry the token), so
+      // this is a per-device number — the phone can hold a different level from
+      // the Mac, and that is a choice, not a sync bug
+      s.vocabLevel = Math.max(0, parseInt(e.target.value, 10) || 0);
+      s.vocabLevelSet = true;
+      setSettings(s);
+      renderDiscover();
+    });
     $("#dmore").addEventListener("click", () => { dCursor[dTab] += PAGE; drawStudy(); });
     drawStudy();
   }
@@ -2558,6 +2954,11 @@
     if (!vidOpen) {
       view.innerHTML = sec + renderLibrary();
       bindSectionSwitch();
+      // the Articles / Videos chips — bound BEFORE the card handler, since a
+      // chip is not a card and would otherwise just do nothing
+      view.querySelectorAll("[data-lf]").forEach((c) => c.addEventListener("click", () => {
+        libFilter = c.dataset.lf; renderDiscover();
+      }));
       view.querySelectorAll("[data-vid]").forEach((c) => c.addEventListener("click", () => {
         vidOpen = c.dataset.vid; vidTab = "vocab"; vidFilter = "new"; vidSel.clear();
         renderDiscover();
@@ -2571,20 +2972,109 @@
     const back = $("#vidBack");
     if (back) back.addEventListener("click", () => { vidOpen = null; vidSel.clear(); renderDiscover(); });
     view.querySelectorAll("[data-vt]").forEach((b) => b.addEventListener("click", () => { vidTab = b.dataset.vt; renderDiscover(); }));
+    view.querySelectorAll("[data-vlook]").forEach((el) => el.addEventListener("click", (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
+      go("notebook"); openLookupPane(); doLookup(el.dataset.vlook, "");
+    }));
     view.querySelectorAll("[data-vf]").forEach((b) => b.addEventListener("click", () => { vidFilter = b.dataset.vf; renderDiscover(); }));
+    view.querySelectorAll("[data-vplay]").forEach((b) => b.addEventListener("click", (ev) => {
+      ev.preventDefault(); ev.stopPropagation();          // the row is a <label> — don't tick it
+      const f = vidFull[vidOpen], id = vidEmbedIdH5((videoIdx()[vidOpen] || {}).url || (f && f.url));
+      if (!id) return;
+      const from = Math.max(0, parseInt(b.dataset.vplay, 10) || 0);
+      vidPlay = { id, from, to: vidLineEndH5(f, from), n: (vidPlay ? vidPlay.n : 0) + 1 };
+      renderDiscover();
+    }));
+    const stopB = view.querySelector("#vidStop");
+    if (stopB) stopB.addEventListener("click", () => { vidPlay = null; renderDiscover(); });
+    view.querySelectorAll("[data-vband]").forEach((b) => b.addEventListener("click", () => {
+      vidBand = vidBand === b.dataset.vband ? "" : b.dataset.vband; renderDiscover();
+    }));
+    const vl = $("#vLvl");
+    if (vl) vl.addEventListener("change", (e) => {
+      const s = getSettings();
+      s.vocabLevel = Math.max(0, parseInt(e.target.value, 10) || 0);
+      s.vocabLevelSet = true;
+      setSettings(s); renderDiscover();
+    });
     view.querySelectorAll("[data-vpick]").forEach((c) => c.addEventListener("change", () => {
       if (c.checked) vidSel.add(c.dataset.vpick); else vidSel.delete(c.dataset.vpick);
-      const go = $("#vidAdd");
-      if (go) { go.textContent = `＋ Add ${vidSel.size}`; go.disabled = vidSel.size === 0; }
+      // every button reads these counts — refresh them all, or the one left
+      // behind keeps its render-time label and its render-time disabled. Split,
+      // because a selection of mastered rows must not arm "Add".
+      const sel = [...vidSel];
+      const nAdd = sel.filter((k) => vidWordState(k) === "new").length;
+      const nNew = sel.filter((k) => vidWordState(k) !== "mastered").length;
+      const nMas = sel.filter((k) => vidWordState(k) === "mastered").length;
+      const go = $("#vidAdd"), kn = $("#vidKnown"), un = $("#vidUnknown");
+      if (go) { go.textContent = `＋ Add ${nAdd}`; go.disabled = nAdd === 0; }
+      if (kn) { kn.textContent = `Mark ${nNew} known`; kn.disabled = nNew === 0; }
+      if (un) { un.textContent = `Don't know ${nMas} after all`; un.style.display = nMas ? "" : "none"; }
     }));
-    const all = $("#vidAll"), none = $("#vidNone"), add = $("#vidAdd");
+    const all = $("#vidAll"), none = $("#vidNone"), add = $("#vidAdd"), known = $("#vidKnown");
     if (all) all.addEventListener("click", () => {
+      // only what is actually in front of you: a word hidden by your level must
+      // not be swept into the notebook by a button labelled "select all"
       const rec = vidFull[vidOpen] || videoIdx()[vidOpen] || {};
-      (rec.words || []).forEach((w) => { const k = w.k || norm(w.w); if (vidWordState(k) === "new") vidSel.add(k); });
+      vidSnap(rec).forEach((w) => { const k = w.k || norm(w.w); if (vidWordState(k) === "new") vidSel.add(k); });
       renderDiscover();
     });
     if (none) none.addEventListener("click", () => { vidSel.clear(); renderDiscover(); });
     if (add) add.addEventListener("click", () => addPickedFromVideo(add));
+    // "I already know this" is a calibration signal, not a notebook entry: it
+    // stops the word being recommended and counts towards your vocabulary size
+    if (known) known.addEventListener("click", () => {
+      // only the not-learned ones: a mastered row is tickable now, and that tick
+      // means the opposite of this button
+      const sel = [...vidSel].filter((k) => vidWordState(k) !== "mastered");
+      if (!sel.length) return;
+      // Same meaning, two stores: a word you are LEARNING already has an entry
+      // with SRS history, so it is marked mastered there rather than shadowed by
+      // a calibration tick that would leave it in the review queue underneath.
+      const a = getAssess(), have = new Set((a.known || []).map(norm));
+      const ws = getWords();
+      let touched = false;
+      sel.forEach((k) => {
+        const w = ws.find((x) => norm(x.word) === norm(k));
+        if (w) { w.mastered = true; w.updatedAt = Date.now(); touched = true; }
+        else if (!have.has(norm(k))) a.known.push(String(k));
+      });
+      setAssess(a);
+      if (touched) setWords(ws);
+      vidSel.clear();
+      renderDiscover();
+      toast(`Marked ${sel.length} known`);
+    });
+    const unknown = $("#vidUnknown");
+    if (unknown) unknown.addEventListener("click", async () => {
+      const sel = [...vidSel].filter((k) => vidWordState(k) === "mastered");
+      if (!sel.length) return;
+      // Two things can make a word read "mastered", so both have to be undone
+      // or the chip comes straight back: the calibration set, and a notebook
+      // entry that is flagged mastered or has drifted past the 180-day interval.
+      const a = getAssess();
+      const drop = new Set(sel.map(norm));
+      a.known = (a.known || []).filter((w) => !drop.has(norm(w)));
+      setAssess(a);
+      const ws = getWords();
+      let touched = false;
+      ws.forEach((w) => {
+        if (!drop.has(norm(w.word))) return;
+        w.mastered = false;
+        // back in play, history intact — "don't know after all" is not "reset
+        // progress", and zeroing reps would un-learn the drill ladder (§8)
+        const prev = w.srs || {};
+        w.srs = { due: Date.now(), interval: 0, ease: prev.ease || 2.5,
+                  reps: prev.reps || 0, lapses: prev.lapses || 0, last: prev.last || 0 };
+        w.updatedAt = Date.now();
+        touched = true;
+      });
+      if (touched) setWords(ws);
+      const n = sel.length;
+      vidSel.clear();
+      renderDiscover();
+      toast(`${n} back in the recommendations`);
+    });
   }
   // Save the ticked words. Each one is a real look-up, so they go three at a
   // time with the count ticking down rather than fifty requests at once — the
@@ -2601,7 +3091,12 @@
       const term = norm(w.w);
       try {
         if (!findWord(term)) {
-          const p = await lookupFull(term);
+          // A verb pattern has no dictionary entry anywhere — looking it up can
+          // only end in "not found" printed over something correct.
+          const p = w.p
+            ? { term: w.w, lookup: term, cn: w.cn || "", vpat: true, done: true,
+                meanings: [{ pos: "verb pattern", definition: w.w, cn: w.cn || "" }], examples: [] }
+            : await lookupFull(term);
           p.context = w.s || "";
           p.source = light.t || rec.title || "YouTube";
           if (saveWord(p)) saved++;
@@ -2744,6 +3239,8 @@
         <p class="muted" style="font-size:12px;margin:-4px 0 8px;line-height:1.6">Auto climbs a ladder as a word matures: pick the meaning → pick the word → write it into a sentence. <b>Flip card</b> is the classic self-marked card — it moves the schedule, but it never counts toward <b>produced</b> and can't earn <b>Mastered</b>, because you weren't asked to produce anything.</p>
         <label class="set">Show examples <input type="checkbox" id="setEx" ${s.showExamples ? "checked" : ""}></label>
         <label class="set">Auto top-up (examples / gloss / frequency) <input type="checkbox" id="setAuto" ${s.autoEnrich !== false ? "checked" : ""}></label>
+        <label class="set">My vocabulary size <input type="number" id="setLvl" value="${Number(s.vocabLevel) || 0}" min="0" max="40000" step="500" inputmode="numeric" style="width:88px"></label>
+        <p class="muted" style="font-size:12px;margin:-4px 0 8px;line-height:1.6"><b>One number, everywhere.</b> Words commoner than this count as already yours: skipped in Discover's word list, and hidden from a saved article or episode. Lower it to bring commoner words back — saved material re-filters as you change it, down to the level it was recorded at. <b>0</b> uses your reading-assessment estimate instead. Kept on this device only, since settings never ride the sync.</p>
         <label class="set">New words per day <input type="number" id="setLimit" value="${s.dailyNewLimit}" min="1" max="100" style="width:70px"></label>
         <label class="set">Daily review goal <input type="number" id="setGoal" value="${s.dailyGoal || 20}" min="5" max="200" step="5" style="width:70px"></label>
       </div>
@@ -2771,7 +3268,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.95.0 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.109.0 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
@@ -2791,6 +3288,8 @@
     }));
     $("#setEx").addEventListener("change", (e) => { s.showExamples = e.target.checked; setSettings(s); });
     $("#setAuto").addEventListener("change", (e) => { s.autoEnrich = e.target.checked; setSettings(s); });
+    $("#setLvl").addEventListener("change", (e) => { s.vocabLevel = Math.max(0, parseInt(e.target.value, 10) || 0);
+      s.vocabLevelSet = true; setSettings(s); });
     $("#setLimit").addEventListener("change", (e) => { s.dailyNewLimit = +e.target.value || 15; setSettings(s); });
     $("#setGoal").addEventListener("change", (e) => { s.dailyGoal = +e.target.value || 20; setSettings(s); });
     $("#assessBtn").addEventListener("click", startAssess);
@@ -2924,9 +3423,19 @@
         if (!v || !v.id) return;
         idx[vid] = {
           u: v.updatedAt || v.savedAt || 0, t: v.title || vid, url: v.url || "",
+          // an article and an episode share this store; `kind` is what the card
+          // and the detail page branch on, so it has to ride in the LIGHT index
+          // — otherwise the phone must download the whole file just to know
+          // which one it is looking at
+          kind: v.kind || "", site: v.site || "", img: v.image || "",
+          // the level it was recorded at, so the phone can filter to YOUR level
+          // and say honestly when an easy word is missing from the file rather
+          // than from the page — one number, not a re-download
+          lvl: v.lvl || 0,
           s: v.savedAt || 0, raw: f.raw_url || "", lines: (v.lines || []).length,
           // the words WITHOUT their sentences — that is the bulky half
-          words: (v.words || []).map((w) => ({ w: w.w, k: w.k, r: w.r || null, c: w.c ? 1 : 0 })),
+          words: (v.words || []).map((w) => ({ w: w.w, k: w.k, r: w.r || null, c: w.c ? 1 : 0,
+            p: w.p ? 1 : 0, cn: w.p ? (w.cn || "") : "" })),
         };
         touched = true;
       });
@@ -2960,7 +3469,10 @@
       if (g.id && g.id !== s.gistId) { s.gistId = g.id; setSettings(s); }
       refreshBadge();
       if (!opts.silent) { toast(`Synced ✓ ${getWords().length} words`); go("me"); }
-      else if (changed && (current === "notebook" || current === "review" || current === "me")) go(current); // reflect pulled words
+      // …including discover: a silent pull is the ONLY way episodes ever arrive
+      // on the phone, so the one view that shows them must be in this list or you
+      // sit looking at "No episodes yet" while they are already in localStorage.
+      else if (changed && (current === "notebook" || current === "review" || current === "me" || current === "discover")) go(current);
     } catch (err) {
       if (!opts.silent) toast("Sync failed:" + (err.message || err));
       if (btn) btn.textContent = label || "☁️ Sync";
