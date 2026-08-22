@@ -4297,7 +4297,17 @@ function lexisAlignZh(x, z, from, to) {
       var zov = zhi - zlo, len = zs[i].end - zs[i].start;
       if (zov > 0 && zov >= len * 0.4) keep.push(zs[i].text.trim());
     }
-    if (keep.length >= zs.length) keep = [];      // it selected everything — no better than the whole line
+    // A ROW SHOWS ONE SENTENCE, SO ITS TRANSLATION IS ONE SENTENCE.
+    //
+    // Measured on a real transcript: a line's `z` is NOT the translation of its
+    // `x`. The span translator put a whole span's Chinese on its head line, so
+    // one line reads 113 English characters / 1 sentence against 117 Chinese
+    // characters / 5 sentences — a ratio of 1.04 where a faithful translation
+    // runs about 0.5. Proportional mapping over that lands on two or three
+    // sentences that belong to lines further down. Anything but exactly one is
+    // therefore not an alignment, it is a guess, and the caller translates the
+    // sentence itself instead.
+    if (keep.length !== 1) keep = [];
   }
   if (keep.length) return keep.join("");
   // NOTHING BEATS THE WRONG THING.
