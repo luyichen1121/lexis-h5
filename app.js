@@ -1506,7 +1506,7 @@
     if ((s.lapses || 0) >= 4) return { key: "leech", cn: "Tricky" };
     if ((s.reps || 0) >= 3) return { key: "familiar", cn: "Familiar" };
     if ((s.reps || 0) >= 1) return { key: "learning", cn: "Learning" };
-    return { key: "new", cn: "New" };
+    return { key: "new", cn: "Not learned" };
   }
   const NB_BAND_ORDER = { core: 0, "very-common": 1, common: 2, mid: 3, low: 4, rare: 5 };
   const NB_SORTS = [["new", "Recently saved"], ["freq", "Frequency"], ["due", "Due"], ["az", "A–Z"]];
@@ -1540,7 +1540,7 @@
         <button data-f="all" class="${nbFilter === "all" ? "on" : ""}">All</button>
         <button data-f="due" class="${nbFilter === "due" ? "on" : ""}">due ${dueWords().length}</button>
         <button data-f="learning" class="${nbFilter === "learning" ? "on" : ""}">Learning</button>
-        <button data-f="mastered" class="${nbFilter === "mastered" ? "on" : ""}">Mastered</button>
+        <button data-f="mastered" class="${nbFilter === "mastered" ? "on" : ""}">Known</button>
       </div>
       <form class="search" id="nbsearch" style="margin-bottom:10px">
         <input id="nbq" placeholder="Search your notebook, or type a new word to look it up…" value="${esc(nbQuery)}" autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -3191,7 +3191,7 @@
         ${scene ? `<span class="g">${esc(scene)}</span>` : ""}
         <span class="act">
           <button class="btn" data-act="learn">Learn</button>
-          <button class="btn sage" data-act="master">Mastered</button>
+          <button class="btn sage" data-act="master">Mark known</button>
         </span>
         ${hiEx ? `<div class="study-ex">${hiEx}</div>` : ""}
         ${pv ? pv.senses.map((sn) => `<div class="pv-sense"><span class="pv-pct">${sn.p}%</span><b>${esc(sn.d)}</b><div class="study-ex">${esc(sn.e)}</div></div>`).join("") : ""}</div>`;
@@ -3227,7 +3227,7 @@
         <div class="row" style="justify-content:space-between">
           <div><div class="stat">${words.length}</div><div class="muted">words</div></div>
           <div><div class="stat">${dueWords().length}</div><div class="muted">due</div></div>
-          <div><div class="stat">${mastered}</div><div class="muted">Mastered</div></div>
+          <div><div class="stat">${mastered}</div><div class="muted">known</div></div>
         </div>
       </div>
       <div class="card">
@@ -3301,7 +3301,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.109.1 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.109.2 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
