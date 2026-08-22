@@ -2884,7 +2884,7 @@
       }
       const tag = x.st === "learning" ? `<span class="chip">learning</span>`
                 : x.st === "mastered" ? `<span class="chip">known</span>` : "";
-      out += `<label class="vrow${x.st === "new" ? "" : " done"}">
+      out += `<label class="vrow${x.st === "mastered" ? " done" : ""}">
           <input type="checkbox" data-vpick="${esc(x.k)}" ${vidSel.has(x.k) ? "checked" : ""}/>
           <div>
             <div><span class="serif" style="font-size:16px">${esc(x.w)}</span>${(x.forms || []).length ? `<span class="vr">also ${esc(x.forms.join(" / "))}</span>` : ""}
@@ -3322,7 +3322,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.109.5 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.109.6 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
