@@ -3301,7 +3301,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.109.2 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.109.3 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
@@ -3450,7 +3450,9 @@
         // >1MB arrives truncated with a raw_url instead of content — record the
         // link and let the episode page fetch it when it is actually opened
         if (!v && f.raw_url) {
-          idx[vid] = { u: r.u || 0, t: r.t || vid, url: r.url || "", raw: f.raw_url, words: [], partial: true };
+          // truncated (>1MB): the index is all we have, so take what it carries
+          idx[vid] = { u: r.u || 0, t: r.t || vid, url: r.url || "", kind: r.kind || "",
+                       site: r.site || "", lvl: r.lvl || 0, raw: f.raw_url, words: [], partial: true };
           touched = true; return;
         }
         if (!v || !v.id) return;
