@@ -2783,20 +2783,32 @@
   const VID_BANDS = [
     { k: "r1", label: "Top 10k" }, { k: "r2", label: "10–15k" }, { k: "r3", label: "15–20k" },
     { k: "r4", label: "20k+" }, { k: "r0", label: "unranked" },
-    { k: "ck", label: "Phrases & patterns" },
+    { k: "pv", label: "Phrasal verbs" },
+    { k: "expr", label: "Fixed expressions" },
   ];
   // one GROUP as well as one chip — a heading the legend cannot filter to is
   // the same split under another name
-  const vidGrpKey = (w) => { const k = vidBandKey(w); return k === "vp" ? "ck" : k; };
+  const vidGrpKey = (w) => { const k = vidBandKey(w); return k === "vp" ? "expr" : k; };
   // a phrase is ranked among phrases, so it never gets filed under a word band —
   // and a verb pattern is on no frequency list at all
   // one bucket for everything that is more than one word — see the extension
   const vidBandIsH5 = (w, band) => {
     const k = vidBandKey(w);
-    return band === "ck" ? (k === "ck" || k === "vp") : k === band;
+    // a verb pattern is a fixed unit too — it folds into fixed expressions
+    return band === "expr" ? (k === "expr" || k === "vp") : k === band;
   };
-  const vidBandKey = (w) => (w && w.p) ? "vp" : (w && w.c) ? "ck"
-    : (!w || !w.r) ? "r0" : w.r <= 10000 ? "r1" : w.r <= 15000 ? "r2" : w.r <= 20000 ? "r3" : "r4";
+  // THE SAME THREE BUCKETS EVERYWHERE — the notebook and Discover split
+  // multiword entries into phrasal verbs and fixed expressions (one shared
+  // classifier, lexisKindOf), and an episode used to pile them all into
+  // "phrases": the same words, two answers depending on the page.
+  const vidBandKey = (w) => {
+    if (w && w.p) return "vp";
+    if (w && w.c) {
+      const t = norm(w.b || w.w || w.k || "");
+      return (typeof window.lexisKindOf === "function" && window.lexisKindOf(t) === "pv") ? "pv" : "expr";
+    }
+    return (!w || !w.r) ? "r0" : w.r <= 10000 ? "r1" : w.r <= 15000 ? "r2" : w.r <= 20000 ? "r3" : "r4";
+  };
 
   // What this snapshot holds AT YOUR CURRENT LEVEL. The record keeps everything
   // down to a floor, so changing your level re-answers the question for material
@@ -2933,7 +2945,8 @@
         ${sw("r3", "15–20k", counts.r3 || 0, vidBands.has("r3"))}
         ${sw("r4", "20k+", counts.r4 || 0, vidBands.has("r4"))}
         ${sw("r0", "unranked", counts.r0 || 0, vidBands.has("r0"))}
-        ${sw("ck", "phrases", (counts.ck || 0) + (counts.vp || 0), vidBands.has("ck"))}
+        ${sw("pv", "phrasal verbs", counts.pv || 0, vidBands.has("pv"))}
+      ${sw("expr", "fixed expressions", (counts.expr || 0) + (counts.vp || 0), vidBands.has("expr"))}
         ${/* the legend explains the MARKS, and only the transcript draws them —
               see the extension's note */
           vidTab === "script"
@@ -3622,7 +3635,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.113.2 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.113.3 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
