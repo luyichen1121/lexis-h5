@@ -1740,7 +1740,39 @@
   // SAME three buckets as Discover — 单词 / Phrasal verbs / Fixed expressions — from the same
   // shared classifier, so a term carries one label everywhere it appears. The
   // finer split (习语/介词短语/…) is the chip row below.
-  const NB_KINDS = [["all", "All"], ["word", "Words"], ["pv", "Phrasal verbs"], ["expr", "Fixed expressions"]];
+  const NB_KINDS = [["all", "All"], ["word", "Words"], ["pv", "Phrasal verbs"], ["expr", "Fixed expressions"],
+                    ["cmp", "Confusables"]];
+  // Every "tell them apart" answer is stored on the entry it was asked from, so
+  // this list is DERIVED — no second store, no second sync. It is exactly the
+  // set of words you have been confusing. (Same shape as the extension's.)
+  function nbCompares() {
+    const seen = new Set(), out = [];
+    getWords().forEach((w) => {
+      const c = (w.data || {}).compare;
+      if (!c || !Array.isArray(c.words) || !c.words.length) return;
+      const terms = (c.terms && c.terms.length ? c.terms : c.words.map((x) => x.word));
+      const key = (typeof window.lexisCompareKey === "function") ? window.lexisCompareKey(terms) : terms.join("|").toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ key, terms, c, from: w });
+    });
+    return out.sort((a, b) => ((b.c.at || 0) - (a.c.at || 0)));
+  }
+  function renderComparesH5() {
+    const rows = nbCompares();
+    if (!rows.length) {
+      return `<div class="card"><p class="muted" style="line-height:1.7">No comparisons yet. Open any word and use <b>Tell them apart</b> — the answer is kept with the word, and every set you ask about shows up here.</p></div>`;
+    }
+    return rows.map((r) => `<div class="card">
+      <div class="cmp-cands">${r.terms.map((t) => {
+        const saved = getWords().some((w) => w.lookup === norm(t));
+        return `<button class="cmp-cand${saved ? " on" : ""}" data-look="${esc(t)}">${esc(t)}</button>`;
+      }).join("")}</div>
+      ${r.c.shared_cn ? `<div class="cmp-shared"><span class="lbl">共同点</span>${esc(r.c.shared_cn)}</div>` : ""}
+      ${r.c.axis_cn ? `<div class="cmp-axis"><span class="lbl">分界线</span>${esc(r.c.axis_cn)}</div>` : ""}
+      <details><summary class="muted" style="font-size:12px">The whole answer</summary>${compareHTMLH5(r.c)}</details>
+    </div>`).join("");
+  }
   const _kindCache = new Map();
   function nbKindOf(w) {
     const t = norm(w.word || "");
@@ -1834,8 +1866,16 @@
     qi.addEventListener("input", () => { nbQuery = qi.value; drawNbList(); });
 
     function drawNbList() {
+      // the comparisons tab renders a different list entirely
+      if (nbKind === "cmp") {
+        const cb = $("#nblist");
+        cb.innerHTML = renderComparesH5();
+        cb.querySelectorAll("[data-look]").forEach((n) => n.addEventListener("click", () => doLookup(n.dataset.look)));
+        return;
+      }
       let list = words.slice();
-      if (nbKind !== "all") list = list.filter((w) => nbKindOf(w) === nbKind);
+      // "cmp" is the comparisons tab, not a kind of word — see renderComparesH5
+    if (nbKind !== "all" && nbKind !== "cmp") list = list.filter((w) => nbKindOf(w) === nbKind);
       if (nbFilter === "due") list = list.filter((w) => (w.srs ? w.srs.due : 0) <= now());
       else if (nbFilter === "learning") list = list.filter((w) => ["learning", "familiar", "leech"].includes(masteryOfH5(w).key));
       else if (nbFilter === "mastered") list = list.filter((w) => masteryOfH5(w).key === "mastered");
@@ -3576,7 +3616,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.112.0 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.113.0 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
