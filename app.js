@@ -229,7 +229,10 @@
     if (!s.aiKey) throw new Error("no key");
     const pr = window.lexisComparePrompt(terms, context);
     if (pr.terms.length < 2) throw new Error("need two words");
-    const provider = s.aiProvider || "groq";
+    // the key names its own service — see aiProviderOf() in background.js
+    const k = String(s.aiKey || "").trim();
+    const provider = /^gsk_/i.test(k) ? "groq" : /^sk-ant-/i.test(k) ? "anthropic"
+      : /^sk-/i.test(k) ? "openai" : (s.aiProvider || "groq");
     const model = s.aiModel || AI_MODEL_H5[provider] || AI_MODEL_H5.groq;
     let text = "";
     if (provider === "anthropic") {
@@ -3426,7 +3429,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.110.0 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.110.1 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
