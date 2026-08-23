@@ -1740,8 +1740,10 @@
   // SAME three buckets as Discover — 单词 / Phrasal verbs / Fixed expressions — from the same
   // shared classifier, so a term carries one label everywhere it appears. The
   // finer split (习语/介词短语/…) is the chip row below.
-  const NB_KINDS = [["all", "All"], ["word", "Words"], ["pv", "Phrasal verbs"], ["expr", "Fixed expressions"],
-                    ["cmp", "Confusables"]];
+  const NB_KINDS = [["all", "All"], ["word", "Words"], ["pv", "Phrasal verbs"], ["expr", "Fixed expressions"]];
+  // Confusables is not a kind of entry — it is a different object (sets of words
+  // you asked about), so it gets its own switch, not a fifth chip in that row.
+  let nbTable = "words";  // "words" | "cmp" — which LIST the notebook shows
   // Every "tell them apart" answer is stored on the entry it was asked from, so
   // this list is DERIVED — no second store, no second sync. It is exactly the
   // set of words you have been confusing. (Same shape as the extension's.)
@@ -1824,6 +1826,10 @@
       <div class="subtabs nb-only" id="nbkinds">
         ${NB_KINDS.map(([k, cn]) => `<button data-k="${k}" class="${nbKind === k ? "on" : ""}">${cn} ${kindCounts[k]}</button>`).join("")}
       </div>
+      <div class="subtabs nb-only" id="nbviews">
+        <button data-v="words" class="${nbTable === "words" ? "on" : ""}">Entries</button>
+        <button data-v="cmp" class="${nbTable === "cmp" ? "on" : ""}">Confusables ${nbCompares().length || ""}</button>
+      </div>
       <div class="subtabs nb-only" id="nbtabs">
         <button data-f="all" class="${nbFilter === "all" ? "on" : ""}">All</button>
         <button data-f="due" class="${nbFilter === "due" ? "on" : ""}">due ${dueWords().length}</button>
@@ -1847,6 +1853,7 @@
       <span class="ctrl-wrap nb-only">${kindRuleHTML()}</span>
       <div id="nblist" class="nb-only"></div>`;
     view.querySelectorAll("#nbkinds button").forEach((b) => b.addEventListener("click", () => { nbKind = b.dataset.k; nbScene = null; renderNotebook(); }));
+    view.querySelectorAll("#nbviews button").forEach((b) => b.addEventListener("click", () => { nbTable = b.dataset.v; renderNotebook(); }));
     view.querySelectorAll("#nbtabs button").forEach((b) => b.addEventListener("click", () => { nbFilter = b.dataset.f; renderNotebook(); }));
     // one toggle instead of three permanent rows of controls above the list
     $("#nbMore").addEventListener("click", () => {
@@ -1867,7 +1874,7 @@
 
     function drawNbList() {
       // the comparisons tab renders a different list entirely
-      if (nbKind === "cmp") {
+      if (nbTable === "cmp") {
         const cb = $("#nblist");
         cb.innerHTML = renderComparesH5();
         cb.querySelectorAll("[data-look]").forEach((n) => n.addEventListener("click", () => doLookup(n.dataset.look)));
@@ -1875,7 +1882,7 @@
       }
       let list = words.slice();
       // "cmp" is the comparisons tab, not a kind of word — see renderComparesH5
-    if (nbKind !== "all" && nbKind !== "cmp") list = list.filter((w) => nbKindOf(w) === nbKind);
+    if (nbKind !== "all") list = list.filter((w) => nbKindOf(w) === nbKind);
       if (nbFilter === "due") list = list.filter((w) => (w.srs ? w.srs.due : 0) <= now());
       else if (nbFilter === "learning") list = list.filter((w) => ["learning", "familiar", "leech"].includes(masteryOfH5(w).key));
       else if (nbFilter === "mastered") list = list.filter((w) => masteryOfH5(w).key === "mastered");
@@ -3616,7 +3623,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.113.0 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.113.1 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
