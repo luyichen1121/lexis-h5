@@ -196,6 +196,69 @@
   }
 
   // ---- audio ----
+  // the words this card offers to contrast: the headword plus what the sources
+  // already flagged as close or easily confused
+  function cmpSeedH5(p) {
+    const near = ((p.lookalikes || []).map((x) => x.word))
+      .concat((p.synonymsRich || []).map((x) => x.word))
+      .concat(p.synonyms || [])
+      .filter((x) => x && norm(x) !== norm(p.term));
+    return [p.term].concat([...new Set(near)].slice(0, 2)).join(", ");
+  }
+  function compareHTMLH5(c) {
+    if (!c || !Array.isArray(c.words) || !c.words.length) return "";
+    return (c.axis_cn ? `<div class="cmp-axis"><span class="lbl">分界线</span>${esc(c.axis_cn)}</div>` : "")
+      + c.words.map((x) => `<div class="cmp-w">
+          <div class="cmp-h"><span class="cmp-t">${esc(x.word)}</span>${x.vibe_cn ? `<span class="cmp-vibe">${esc(x.vibe_cn)}</span>` : ""}</div>
+          ${x.meaning_en ? `<div class="cmp-m">${esc(x.meaning_en)}</div>` : ""}
+          ${x.meaning_cn ? `<div class="cmp-mcn">${esc(x.meaning_cn)}</div>` : ""}
+          ${x.example ? `<div class="cmp-ex">${esc(x.example)}</div>` : ""}
+          ${x.example_cn ? `<div class="cmp-excn">${esc(x.example_cn)}</div>` : ""}
+          ${(x.collocs || []).length ? `<div class="cmp-col">${x.collocs.slice(0, 3).map((y) => `<span>${esc(y)}</span>`).join("")}</div>` : ""}
+        </div>`).join("")
+      + ((c.pairs || []).length ? `<div class="cmp-pairs">${c.pairs.map((q) =>
+          `<div class="cmp-pair"><b>${esc(q.a)} · ${esc(q.b)}</b> ${esc(q.note_cn || "")}</div>`).join("")}</div>` : "");
+  }
+  // One provider layer, same three as the extension. Groq is the free one and
+  // is CORS-open, which is why this works in a browser at all.
+  const AI_BASE_H5 = { groq: "https://api.groq.com/openai/v1/chat/completions",
+                       openai: "https://api.openai.com/v1/chat/completions" };
+  const AI_MODEL_H5 = { groq: "llama-3.3-70b-versatile", openai: "gpt-4o-mini", anthropic: "claude-3-5-haiku-latest" };
+  async function aiCompareH5(terms, context) {
+    const s = getSettings();
+    if (!s.aiKey) throw new Error("no key");
+    const pr = window.lexisComparePrompt(terms, context);
+    if (pr.terms.length < 2) throw new Error("need two words");
+    const provider = s.aiProvider || "groq";
+    const model = s.aiModel || AI_MODEL_H5[provider] || AI_MODEL_H5.groq;
+    let text = "";
+    if (provider === "anthropic") {
+      const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": s.aiKey, "anthropic-version": "2023-06-01",
+                   "anthropic-dangerous-direct-browser-access": "true" },
+        body: JSON.stringify({ model, max_tokens: 2000, system: pr.sys, messages: [{ role: "user", content: pr.user }] }) });
+      if (!r.ok) throw new Error("anthropic " + r.status);
+      const j = await r.json();
+      text = (j.content || []).map((b) => b.text || "").join("");
+    } else {
+      const r = await fetch(AI_BASE_H5[provider] || AI_BASE_H5.groq, { method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + s.aiKey },
+        body: JSON.stringify({ model, temperature: 0.2, response_format: { type: "json_object" },
+          messages: [{ role: "system", content: pr.sys }, { role: "user", content: pr.user }] }) });
+      if (!r.ok) throw new Error(provider + " " + r.status);
+      const j = await r.json();
+      text = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
+    }
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch (e) {
+      const m = String(text).match(/\{[\s\S]*\}/);
+      if (m) { try { parsed = JSON.parse(m[0]); } catch (e2) {} }
+    }
+    if (!parsed || !Array.isArray(parsed.words) || !parsed.words.length) throw new Error("bad answer");
+    parsed.terms = pr.terms; parsed.at = now(); parsed.by = provider;
+    return parsed;
+  }
+
   function speak(word, url) {
     if (url) { try { new Audio(url).play(); return; } catch (e) {} }
     try { const u = new SpeechSynthesisUtterance(word); u.lang = "en-US"; speechSynthesis.cancel(); speechSynthesis.speak(u); } catch (e) {}
@@ -1003,6 +1066,18 @@
         + p.meanings.map((m) =>
         `<div class="mean">${m.pos ? `<span class="pos">${esc(m.pos)}</span> ` : ""}<span class="def">${esc(m.definition)}</span>${m.cn ? `<div class="cn">${esc(m.cn)}</div>` : ""}</div>`).join("") + `</div>`;
     }
+    // TELL THEM APART — the same card the extension has, asking the same
+    // question of the same model (data/compare.js). Groq answers CORS-open, so
+    // the phone can do this itself; there is no service worker here to relay it.
+    if (!p.vpat) {
+      const c = p.compare;
+      h += `<div class="card" id="cmpSec"><h2 class="sec">Tell them apart</h2>
+        <div class="cmp-in"><input class="cmp-terms" id="cmpTerms" value="${esc(cmpSeedH5(p))}" placeholder="flourish, nurture, nourish"/>
+        <button class="btn" id="cmpGo">Compare</button></div>
+        <div id="cmpBox">${c && c.words ? compareHTMLH5(c) : (getSettings().aiKey
+          ? `<div class="cmp-note">Two or three words, comma-separated. One request; the answer is kept with the word.</div>`
+          : `<div class="cmp-note">Needs a model key — <b>Groq is free</b> (console.groq.com, no card). Paste it in Me · ⚙️.</div>`)}</div></div>`;
+    }
     // Origin — knowing the picture behind a phrase is what makes it recallable
     if (p.origin && p.origin.text) {
       const o = p.origin, lit = o.kind === "literal";
@@ -1105,6 +1180,25 @@
   // Kept in `data.userExamples` and always rendered ABOVE the fetched ones. The
   // Chinese line is auto-translated (best effort) so you only type the English.
   function wireExampleEditor(root, p, onChange) {
+    // "Tell them apart" — one request, cached on the word so it is paid once
+    const cg = root.querySelector("#cmpGo");
+    if (cg) cg.addEventListener("click", async () => {
+      const box = root.querySelector("#cmpBox"), inp = root.querySelector("#cmpTerms");
+      const terms = String((inp && inp.value) || "").split(/[,;、]+/).map((t) => t.trim()).filter(Boolean).slice(0, 5);
+      if (terms.length < 2) { box.innerHTML = `<div class="cmp-note">Give at least two words, comma-separated.</div>`; return; }
+      if (!getSettings().aiKey) { box.innerHTML = `<div class="cmp-note">No model key yet — Groq is free (console.groq.com) and goes in Me · ⚙️.</div>`; return; }
+      box.innerHTML = `<div class="cmp-note">asking…</div>`;
+      cg.disabled = true;
+      try {
+        const out = await aiCompareH5(terms, p.context || "");
+        p.compare = out;
+        box.innerHTML = compareHTMLH5(out);
+        onChange && onChange();
+      } catch (e) {
+        box.innerHTML = `<div class="cmp-note err">Couldn't get the comparison — ${esc(String((e && e.message) || e))}.</div>`;
+      }
+      cg.disabled = false;
+    });
     const add = root.querySelector("#addExBtn");
     if (add) add.addEventListener("click", async () => {
       const text = (prompt("Write a sentence using “" + p.term + "」 example:", "") || "").trim();
@@ -1144,6 +1238,7 @@
         synonyms: p.synonyms, synonymsRich: p.synonymsRich, family: p.family,
         lookalikes: p.lookalikes, collocations: p.collocations, isPhrase: p.isPhrase,
         origin: p.origin || null, sensesOf: p.sensesOf || "", sensesFrom: p.sensesFrom || "",
+        compare: p.compare || null,     // a contrast you paid for travels with the word
         // the composed entry for a term no dictionary lists — see the breakdown
         // card in cardHTML(); without this it was thrown away on save
         partGlosses: p.partGlosses || null,
@@ -3298,6 +3393,8 @@
         <label class="set" style="align-items:flex-start">Review card <span class="subtabs" style="margin:0;flex-wrap:wrap;justify-content:flex-end">${[["auto", "Auto"], ["en2cn", "Word→meaning"], ["cloze", "Cloze"], ["zh2en", "Meaning→word"], ["flip", "Flip card"]].map(([k, lab]) =>
             `<button class="${(s.reviewDrill || "auto") === k ? "on" : ""}" data-drill="${k}">${lab}</button>`).join("")}</span></label>
         <p class="muted" style="font-size:12px;margin:-4px 0 8px;line-height:1.6">Auto climbs a ladder as a word matures: pick the meaning → pick the word → write it into a sentence. <b>Flip card</b> is the classic self-marked card — it moves the schedule, but it never counts toward <b>produced</b> and can't earn <b>known</b>, because you weren't asked to produce anything.</p>
+        <label class="set">Model key (“Tell them apart”) <input type="password" id="setAiKey" autocomplete="off" placeholder="gsk_…" value="${esc(s.aiKey || "")}" style="width:130px"></label>
+        <p class="muted" style="font-size:12px;margin:-4px 0 8px;line-height:1.6"><b>Groq is free</b> — console.groq.com, no card. It only powers the written comparison of confusable words (flourish / nurture / nourish); everything else here works without it. The key stays on this device and never rides the sync.</p>
         <label class="set">Show examples <input type="checkbox" id="setEx" ${s.showExamples ? "checked" : ""}></label>
         <label class="set">Auto top-up (examples / gloss / frequency) <input type="checkbox" id="setAuto" ${s.autoEnrich !== false ? "checked" : ""}></label>
         <label class="set">My vocabulary size <input type="number" id="setLvl" value="${Number(s.vocabLevel) || 0}" min="0" max="40000" step="500" inputmode="numeric" style="width:88px"></label>
@@ -3329,7 +3426,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.109.11 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.110.0 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
@@ -3348,6 +3445,12 @@
       renderMe();
     }));
     $("#setEx").addEventListener("change", (e) => { s.showExamples = e.target.checked; setSettings(s); });
+    // typed, not pasted-and-forgotten: save on blur so a half-typed key is never stored
+    $("#setAiKey").addEventListener("change", (e) => {
+      s.aiKey = String(e.target.value || "").trim();
+      if (!s.aiProvider) s.aiProvider = "groq";
+      setSettings(s); toast(s.aiKey ? "Key saved on this device" : "Key cleared");
+    });
     $("#setAuto").addEventListener("change", (e) => { s.autoEnrich = e.target.checked; setSettings(s); });
     $("#setLvl").addEventListener("change", (e) => { s.vocabLevel = Math.max(0, parseInt(e.target.value, 10) || 0);
       s.vocabLevelSet = true; setSettings(s); });
