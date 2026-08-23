@@ -1,4 +1,7 @@
-/* Lexis — the contrast prompt. ONE implementation, four surfaces.
+/* Lexis — the shared PROMPTS. ONE implementation, four surfaces.
+ *
+ * Two of them live here: the contrast ("what is the difference between these
+ * words") and the spelling story ("why is it spelled like this").
  *
  * A classic script that assigns to globalThis, exactly like data/examples.js:
  * the module service worker `import`s it for the side effect, the options page
@@ -71,6 +74,39 @@ function lexisCmpClean(text) {
   }
   return t;
 }
+// WHY IS IT SPELLED LIKE THIS?
+//
+// The word-parts card answers "what pieces is it made of", which is not the
+// question. The question is why THIS string of letters means THIS thing, and
+// the answer that sticks is usually the origin: torment / torture / distort are
+// all Latin torquere, "to twist" — once you see that, the spelling stops being
+// arbitrary and the three words stop being interchangeable.
+//
+// A dictionary's etymology paragraph is not it either: it is written for
+// reference, not for remembering. This asks for the same fact shaped as a hook,
+// plus the words that share the root — because knowing one root pays for
+// several words at once, which is the whole reason to learn a root at all.
+function lexisSpellPrompt(term, senseHint) {
+  var w = String(term || "").trim();
+  var sys = "You are an etymologist writing for a Chinese learner of English who wants to REMEMBER a spelling. " +
+    "Never invent an origin: if it is unknown or disputed, say so. Prefer the plain story over the technical one. " +
+    "Return ONLY strict minified JSON, no markdown, no prose outside JSON.";
+  var user =
+    'Word: "' + w + '"\n' +
+    (senseHint ? "It is being learned in this sense: " + String(senseHint).slice(0, 160) + "\n" : "") +
+    "Explain why this word is spelled the way it is, so the spelling stops feeling arbitrary.\n" +
+    "origin_cn: where the spelling comes from, ONE complete clause in Chinese — the source language, the " +
+    "original form, and what it literally meant. If the origin is unknown, say so plainly instead of guessing.\n" +
+    "hook_cn: a memory hook of at most 30 Chinese characters that ties that literal picture to the meaning the " +
+    "learner meets today. Concrete, not a definition. Example for torment: 「拧」——torquere,拧得人受不了。\n" +
+    "parts: the pieces of the spelling worth knowing, [{\"piece\":\"…\",\"meaning_cn\":\"…\"}]. Only real " +
+    "morphemes with real meanings — an empty list if the word is not built from parts. Never split a word just " +
+    "to fill this in (torment is NOT ment + ment).\n" +
+    "kin: 2–4 English words that share the same root and are worth knowing, [{\"word\":\"…\",\"cn\":\"…\"}]. " +
+    "Words the learner is likely to meet, not obscure ones. Empty if there are none.\n" +
+    'Return JSON exactly: {"origin_cn":"…","hook_cn":"…","parts":[{"piece":"…","meaning_cn":"…"}],"kin":[{"word":"…","cn":"…"}]}';
+  return { sys: sys, user: user, term: w };
+}
 // the cache key for one comparison: the same words in any order are one question
   function lexisCompareKey(terms) {
   return (terms || []).map(function (t) { return String(t || "").toLowerCase().trim(); })
@@ -81,4 +117,5 @@ function lexisCmpClean(text) {
   g.lexisComparePrompt = lexisComparePrompt;
   g.lexisCompareKey = lexisCompareKey;
   g.lexisCmpClean = lexisCmpClean;
+  g.lexisSpellPrompt = lexisSpellPrompt;
 })(typeof globalThis !== "undefined" ? globalThis : this);

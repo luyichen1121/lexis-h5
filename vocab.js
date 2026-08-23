@@ -3285,7 +3285,7 @@ function lexisMergeData(a, b) {
     var no = Array.isArray(other[f]) ? other[f].length : 0;
     if (no > nb) out[f] = other[f];
   });
-  ["cn", "phonetic", "audioUs", "audioUk", "audio", "contextMeaning", "freq", "compare"].forEach(function (f) {
+  ["cn", "phonetic", "audioUs", "audioUk", "audio", "contextMeaning", "freq", "compare", "spell"].forEach(function (f) {
     if (!better[f] && other[f]) out[f] = other[f];
   });
   // Frequency is not all-or-nothing: only one side can compute a word-family

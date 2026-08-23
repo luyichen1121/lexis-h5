@@ -238,6 +238,28 @@
       .filter((x) => x && norm(x) !== norm(p.term));
     return [p.term].concat([...new Set(near)].slice(0, 2)).join(", ");
   }
+  function spellHTMLH5(sp) {
+    if (!sp) return "";
+    return (sp.hook_cn ? `<div class="sp-hook">${esc(sp.hook_cn)}</div>` : "")
+      + (sp.origin_cn ? `<div class="sp-origin">${esc(sp.origin_cn)}</div>` : "")
+      + ((sp.parts || []).length ? `<div class="sp-parts">${sp.parts.map((x) =>
+          `<span class="sp-piece"><b>${esc(x.piece)}</b>${esc(x.meaning_cn || "")}</span>`).join("")}</div>` : "")
+      + ((sp.kin || []).length ? `<div class="sp-kin"><span class="sp-kin-h">同根</span>${sp.kin.map((x) =>
+          `<button class="chip2" data-look="${esc(x.word)}">${esc(x.word)}${x.cn ? " " + esc(x.cn) : ""}</button>`).join("")}</div>` : "");
+  }
+  async function aiSpellH5(term, sense) {
+    const s = getSettings();
+    if (!s.aiKey) throw new Error("no key");
+    const pr = window.lexisSpellPrompt(term, sense);
+    const out = await aiJSONH5(pr.sys, pr.user, 900);
+    if (!out || (!out.origin_cn && !out.hook_cn)) throw new Error("bad answer");
+    const clean = (t) => (typeof window.lexisCmpClean === "function" ? window.lexisCmpClean(t) : String(t || "").trim());
+    out.origin_cn = clean(out.origin_cn); out.hook_cn = clean(out.hook_cn);
+    out.parts = (out.parts || []).filter((x) => x && x.piece && x.meaning_cn).slice(0, 4);
+    out.kin = (out.kin || []).filter((x) => x && x.word && norm(x.word) !== norm(term)).slice(0, 4);
+    out.at = now();
+    return out;
+  }
   function compareHTMLH5(c) {
     if (!c || !Array.isArray(c.words) || !c.words.length) return "";
     return (c.shared_cn ? `<div class="cmp-shared"><span class="lbl">共同点</span>${esc(c.shared_cn)}</div>` : "")
@@ -274,11 +296,10 @@
     ids.sort((a, b) => score(b) - score(a) || a.localeCompare(b));
     return ids[0] || "";
   }
-  async function aiCompareH5(terms, context) {
+  // one provider call, shared by both prompts
+  async function aiJSONH5(sys, user, maxTokens) {
     const s = getSettings();
     if (!s.aiKey) throw new Error("no key");
-    const pr = window.lexisComparePrompt(terms, context);
-    if (pr.terms.length < 2) throw new Error("need two words");
     // the key names its own service — see aiProviderOf() in background.js
     const k = String(s.aiKey || "").trim();
     const provider = /^gsk_/i.test(k) ? "groq" : /^sk-ant-/i.test(k) ? "anthropic"
@@ -289,19 +310,17 @@
       const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
         headers: { "Content-Type": "application/json", "x-api-key": s.aiKey, "anthropic-version": "2023-06-01",
                    "anthropic-dangerous-direct-browser-access": "true" },
-        body: JSON.stringify({ model, max_tokens: 2000, system: pr.sys, messages: [{ role: "user", content: pr.user }] }) });
+        body: JSON.stringify({ model, max_tokens: maxTokens || 2000, system: sys, messages: [{ role: "user", content: user }] }) });
       if (!r.ok) throw new Error("anthropic " + r.status);
-      const j = await r.json();
-      text = (j.content || []).map((b) => b.text || "").join("");
+      const j2 = await r.json();
+      text = (j2.content || []).map((b) => b.text || "").join("");
     } else {
       const call = (m) => fetch(AI_BASE_H5[provider] || AI_BASE_H5.groq, { method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + s.aiKey },
         body: JSON.stringify({ model: m, temperature: 0.2, response_format: { type: "json_object" },
-          messages: [{ role: "system", content: pr.sys }, { role: "user", content: pr.user }] }) });
+          messages: [{ role: "system", content: sys }, { role: "user", content: user }] }) });
       let r = await call(model);
-      // a hardcoded model name is a date stamp — Groq retires and renames them.
-      // Ask what this key can call, take the best one, remember it. (Same as
-      // pickModel() in background.js.)
+      // a hardcoded model name is a date stamp — ask what this key can call
       if (r.status === 404 || r.status === 400) {
         const picked = await pickModelH5(provider, s.aiKey).catch(() => "");
         if (picked && picked !== model) {
@@ -310,18 +329,31 @@
           r = await call(model);
         }
       }
-      if (!r.ok) throw new Error(provider + " " + r.status + " " + (await r.text()).slice(0, 120));
-      const j = await r.json();
-      text = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
+      if (r.status === 429) throw new Error("rate limit on " + model + " — wait a moment and try again");
+      if (!r.ok) throw new Error(provider + " " + r.status);
+      const j2 = await r.json();
+      text = (j2.choices && j2.choices[0] && j2.choices[0].message && j2.choices[0].message.content) || "";
     }
     let parsed = null;
     try { parsed = JSON.parse(text); } catch (e) {
-      const m = String(text).match(/\{[\s\S]*\}/);
-      if (m) { try { parsed = JSON.parse(m[0]); } catch (e2) {} }
+      const m2 = String(text).match(/\{[\s\S]*\}/);
+      if (m2) { try { parsed = JSON.parse(m2[0]); } catch (e2) {} }
     }
+    if (parsed) { parsed.model = model; parsed.by = provider; }
+    return parsed;
+  }
+  async function aiCompareH5(terms, context) {
+    const pr = window.lexisComparePrompt(terms, context);
+    if (pr.terms.length < 2) throw new Error("need two words");
+    const parsed = await aiJSONH5(pr.sys, pr.user, 2000);
     if (!parsed || !Array.isArray(parsed.words) || !parsed.words.length) throw new Error("bad answer");
-    // same repairs the extension makes: a line that stops on a conjunction is
-    // trimmed, and the shared meaning is not repeated under each word
+    // what was asked is what comes back
+    const want = pr.terms.map((t) => norm(t));
+    const byWord = new Map((parsed.words || []).map((w) => [norm(w.word), w]));
+    parsed.words = want.map((t) => byWord.get(t)).filter(Boolean);
+    parsed.missing = want.filter((t) => !byWord.has(t));
+    parsed.pairs = (parsed.pairs || []).filter((q) => want.includes(norm(q.a)) && want.includes(norm(q.b)));
+    // same repairs the extension makes
     const clean = (t) => (typeof window.lexisCmpClean === "function" ? window.lexisCmpClean(t) : String(t || "").trim());
     parsed.shared_cn = clean(parsed.shared_cn);
     parsed.axis_cn = clean(parsed.axis_cn);
@@ -332,9 +364,10 @@
       if (w.diff_cn && w.diff_cn === parsed.shared_cn) w.diff_cn = "";
       if (/^这[三两几]个词|都涉及|都表示/.test(String(w.diff_cn || ""))) w.diff_cn = "";
     });
-    parsed.terms = pr.terms; parsed.at = now(); parsed.by = provider; parsed.model = model;
+    parsed.terms = pr.terms; parsed.at = now();
     return parsed;
   }
+
 
   function speak(word, url) {
     if (url) { try { new Audio(url).play(); return; } catch (e) {} }
@@ -1208,6 +1241,16 @@
     // 词族 (with pos)
     if (p.family && p.family.length) h += `<div class="card"><h2 class="sec">Word family</h2><div class="row">` +
       p.family.map((f) => { const w = f.word || f; const pos = f.pos ? ` <small>${esc(f.pos)}</small>` : ""; return `<span class="chip" data-look="${esc(w)}">${esc(w)}${pos}</span>`; }).join("") + `</div></div>`;
+    // Why this spelling — the question the word-parts card only looked like it
+    // was answering. See lexisSpellPrompt in compare.js.
+    if (!p.vpat && !p.isPhrase) {
+      const sp = p.spell;
+      h += `<div class="card" id="spSec"><h2 class="sec">Why this spelling</h2>
+        <div class="cmp-in"><button class="btn" id="spGo">${sp ? "Ask again" : "Explain the spelling"}</button></div>
+        <div id="spBox">${sp && (sp.origin_cn || sp.hook_cn) ? spellHTMLH5(sp) : (getSettings().aiKey
+          ? `<div class="cmp-note">One request, kept with the word.</div>`
+          : `<div class="cmp-note">Needs a model key — <b>Groq is free</b> (console.groq.com), Me · ⚙️.</div>`)}</div></div>`;
+    }
     // Origin — knowing the picture behind a phrase is what makes it recallable
     if (p.origin && p.origin.text) {
       const o = p.origin, lit = o.kind === "literal";
@@ -1249,6 +1292,24 @@
   // Kept in `data.userExamples` and always rendered ABOVE the fetched ones. The
   // Chinese line is auto-translated (best effort) so you only type the English.
   function wireExampleEditor(root, p, onChange) {
+    // "Why this spelling" — same shape as the contrast: one request, kept on the word
+    const sg = root.querySelector("#spGo");
+    if (sg) sg.addEventListener("click", async () => {
+      const box = root.querySelector("#spBox");
+      if (!getSettings().aiKey) { box.innerHTML = `<div class="cmp-note">No model key yet — Groq is free (console.groq.com), Me · ⚙️.</div>`; return; }
+      box.innerHTML = `<div class="cmp-note">asking…</div>`;
+      sg.disabled = true;
+      try {
+        const out = await aiSpellH5(p.term, ((p.meanings || [])[0] || {}).definition || "");
+        p.spell = out;
+        box.innerHTML = spellHTMLH5(out);
+        sg.textContent = "Ask again";
+        onChange && onChange();
+      } catch (e) {
+        box.innerHTML = `<div class="cmp-note err">Couldn't get it — ${esc(String((e && e.message) || e))}.</div>`;
+      }
+      sg.disabled = false;
+    });
     // "Tell them apart" — one request, cached on the word so it is paid once
     const cg = root.querySelector("#cmpGo");
     if (cg) cg.addEventListener("click", async () => {
@@ -1327,6 +1388,7 @@
         lookalikes: p.lookalikes, collocations: p.collocations, isPhrase: p.isPhrase,
         origin: p.origin || null, sensesOf: p.sensesOf || "", sensesFrom: p.sensesFrom || "",
         compare: p.compare || null,     // a contrast you paid for travels with the word
+        spell: p.spell || null,         // …and so does the spelling story
         // the composed entry for a term no dictionary lists — see the breakdown
         // card in cardHTML(); without this it was thrown away on save
         partGlosses: p.partGlosses || null,
@@ -3514,7 +3576,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.111.0 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.112.0 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
