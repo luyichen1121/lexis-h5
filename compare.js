@@ -35,12 +35,15 @@
     "The learner already knows roughly what each means and cannot choose between them.\n" +
     "Cover EXACTLY these " + list.length + " words — no others, and leave none out.\n" +
     "Answer in this order, and never repeat one part inside another:\n" +
-    "1. shared_cn — what all of them have in common, ONE clause, at most 30 Chinese characters. " +
-    "Say it ONCE here; it must not reappear under the individual words.\n" +
+    "1. shared_cn — what all of them have in common, ONE COMPLETE clause of about 15–30 Chinese " +
+    "characters. It must end as a finished sentence: if it will not fit, say less — never stop " +
+    "mid-clause on 但 / 而 / 并且. Say it ONCE here; it must not reappear under the individual words.\n" +
     "2. axis_cn — the single distinction that separates them, at most 40 Chinese characters. NAME THE " +
     "DIVIDING LINE: what is given, who acts, transitive or not, physical or abstract. " +
-    "Good: 「给的是养分 / 是照料 / 还是把人带大」. Bad: 「描述这些词的区别:用法、使用者、意象」, which " +
-    "describes the task instead of answering it. Never restate these instructions.\n" +
+    "Good: 「给的是养分 / 是照料 / 还是把人带大」 — it says which word sits where. " +
+    "Bad: 「描述这些词的区别:用法、使用者、意象」, which describes the task instead of answering it. " +
+    "Also bad: 「提供者、接受者和行动类型」, which lists the dimensions without saying which word is which. " +
+    "Never restate these instructions.\n" +
     "3. For EACH word: diff_cn (what THIS word does that the others do not, at most 25 Chinese characters — " +
     "a difference, never the shared meaning), meaning_en (one clause, what it denotes), " +
     "meaning_cn (a FAITHFUL translation of meaning_en and nothing else — not a comment, not a list of topics), " +
@@ -52,7 +55,23 @@
     'Return JSON exactly: {"shared_cn":"…","axis_cn":"…","words":[{"word":"…","diff_cn":"…","meaning_en":"…","meaning_cn":"…","example":"…","example_cn":"…","collocs":["…"]}],"pairs":[{"a":"…","b":"…","note_cn":"…"}]}';
   return { sys: sys, user: user, terms: list };
   }
-  // the cache key for one comparison: the same words in any order are one question
+  // A HALF SENTENCE IS NOT AN ANSWER. Asked for "at most 30 Chinese characters",
+// a model will happily stop dead on a conjunction — 「这三个词都涉及对人或动物的
+// 照顾或提供保护,但」 — and the reader is left waiting for the half that says
+// what actually differs. Trailing connectors (and the comma before them) come
+// off, so the line at least ends where it stops.
+function lexisCmpClean(text) {
+  var t = String(text == null ? "" : text).trim();
+  if (!t) return "";
+  var prev = null;
+  while (prev !== t) {
+    prev = t;
+    t = t.replace(/[,、,;;:：]?\s*(但是|但|而是|而|并且|并|不过|然而|以及|还有|同时|和|与|且|however|but|and)\s*[。.]?$/i, "").trim();
+    t = t.replace(/[,、,;;:：]+$/, "").trim();
+  }
+  return t;
+}
+// the cache key for one comparison: the same words in any order are one question
   function lexisCompareKey(terms) {
   return (terms || []).map(function (t) { return String(t || "").toLowerCase().trim(); })
     .filter(Boolean).sort().join("|");
@@ -61,4 +80,5 @@
 
   g.lexisComparePrompt = lexisComparePrompt;
   g.lexisCompareKey = lexisCompareKey;
+  g.lexisCmpClean = lexisCmpClean;
 })(typeof globalThis !== "undefined" ? globalThis : this);

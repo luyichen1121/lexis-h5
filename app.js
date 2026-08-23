@@ -320,7 +320,19 @@
       if (m) { try { parsed = JSON.parse(m[0]); } catch (e2) {} }
     }
     if (!parsed || !Array.isArray(parsed.words) || !parsed.words.length) throw new Error("bad answer");
-    parsed.terms = pr.terms; parsed.at = now(); parsed.by = provider;
+    // same repairs the extension makes: a line that stops on a conjunction is
+    // trimmed, and the shared meaning is not repeated under each word
+    const clean = (t) => (typeof window.lexisCmpClean === "function" ? window.lexisCmpClean(t) : String(t || "").trim());
+    parsed.shared_cn = clean(parsed.shared_cn);
+    parsed.axis_cn = clean(parsed.axis_cn);
+    (parsed.pairs || []).forEach((q) => { q.note_cn = clean(q.note_cn); });
+    (parsed.words || []).forEach((w) => {
+      w.meaning_cn = clean(w.meaning_cn);
+      w.diff_cn = clean(w.diff_cn);
+      if (w.diff_cn && w.diff_cn === parsed.shared_cn) w.diff_cn = "";
+      if (/^这[三两几]个词|都涉及|都表示/.test(String(w.diff_cn || ""))) w.diff_cn = "";
+    });
+    parsed.terms = pr.terms; parsed.at = now(); parsed.by = provider; parsed.model = model;
     return parsed;
   }
 
@@ -3502,7 +3514,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.110.6 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.110.7 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
