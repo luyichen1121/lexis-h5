@@ -3191,7 +3191,7 @@
       out += `<label class="vrow${x.st === "mastered" ? " done" : ""}">
           <input type="checkbox" data-vpick="${esc(x.k)}" ${vidSel.has(x.k) ? "checked" : ""}/>
           <div>
-            <div><span class="serif" style="font-size:16px">${esc(x.w)}</span>${x.p ? "" : `<button class="study-say" data-say="${esc(x.w)}" title="Pronounce">🔊</button>`}${(x.forms || []).length ? `<span class="vr">also ${esc(x.forms.join(" / "))}</span>` : ""}
+            <div><button class="vrow-w serif" data-vlook="${esc(x.b || x.w)}" data-vctx="${esc(sentOfRow(x))}">${esc(x.w)}</button>${x.p ? "" : `<button class="study-say" data-say="${esc(x.w)}" title="Pronounce">🔊</button>`}${(x.forms || []).length ? `<span class="vr">also ${esc(x.forms.join(" / "))}</span>` : ""}
               <span class="vr">${x.p ? "verb pattern" : x.c ? (x.r ? "phrase #" + x.r.toLocaleString("en-US") : "taught chunk") : (x.r ? "#" + x.r.toLocaleString("en-US") : "—")}</span>${tag}</div>
             ${x.p && x.cn ? `<div class="vcn">${esc(x.cn)}</div>` : ""}
             ${x.s ? (() => {
@@ -3251,12 +3251,24 @@
         <button data-d="words" class="${dTab === "words" ? "on" : ""}">Words</button>
         <button data-d="pv" class="${dTab === "pv" ? "on" : ""}">Phrasal verbs</button>
         <button data-d="phrases" class="${dTab === "phrases" ? "on" : ""}">Fixed expressions</button>
+        ${/* the same table the notebook shows — these are words worth working on
+              and they are the ones you demonstrably confuse */""}
+        <button data-d="cmp" class="${dTab === "cmp" ? "on" : ""}">Confusables ${nbCompares().length || ""}</button>
       </div>
-      <p class="muted" style="font-size:13px;margin-top:0">${discoverHint()}</p>
-      ${kindRuleHTML()}
-      <div id="dcats"></div>
-      <div id="dlist"></div>
-      <div class="row" style="margin-top:14px"><button class="btn" id="dmore" style="flex:1">Shuffle ↻</button></div>`;
+      <p class="muted" style="font-size:13px;margin-top:0">${dTab === "cmp"
+        ? "The word sets you could not tell apart — your own list, newest first. Tap a word to look it up."
+        : discoverHint()}</p>
+      ${dTab === "cmp" ? "" : kindRuleHTML()}
+      ${dTab === "cmp" ? `<div id="dlist">${renderComparesH5()}</div>` : `
+        <div id="dcats"></div>
+        <div id="dlist"></div>
+        <div class="row" style="margin-top:14px"><button class="btn" id="dmore" style="flex:1">Shuffle ↻</button></div>`}`;
+    if (dTab === "cmp") {
+      view.querySelectorAll("#dtabs button").forEach((b) => b.addEventListener("click", () => { dTab = b.dataset.d; renderDiscover(); }));
+      view.querySelectorAll("#dlist [data-look]").forEach((n) => n.addEventListener("click", () => doLookup(n.dataset.look)));
+      bindSectionSwitch();
+      return;
+    }
     view.querySelectorAll("#dtabs button").forEach((b) => b.addEventListener("click", () => { dTab = b.dataset.d; renderDiscover(); }));
     bindSectionSwitch();
     if ($("#dCal")) $("#dCal").addEventListener("click", () => renderReadingPick());
@@ -3324,6 +3336,12 @@
     // the word on its own — the ▸ next to it plays the sentence as it was said,
     // which is a different question. The row is a <label>, so a click here must
     // not tick its checkbox.
+    // the word itself opens the look-up card — the extension's rows have done
+    // this since v1.93.0; tapping a word here did nothing at all
+    view.querySelectorAll("[data-vlook]").forEach((b) => b.addEventListener("click", (ev) => {
+      ev.preventDefault(); ev.stopPropagation();          // the row is a <label>
+      doLookup(b.dataset.vlook, b.dataset.vctx || "");
+    }));
     view.querySelectorAll("[data-say]").forEach((b) => b.addEventListener("click", (ev) => {
       ev.preventDefault(); ev.stopPropagation();
       speak(b.dataset.say, "");
@@ -3635,7 +3653,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.113.3 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.114.0 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {

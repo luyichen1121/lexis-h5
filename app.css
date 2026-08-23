@@ -576,3 +576,8 @@ body.looking .nb-only{display:none}
 .nb-switch{border:1px dashed var(--line);background:transparent;color:var(--clay);border-radius:20px;
   padding:7px 14px;font-size:13px;margin-bottom:10px}
 .nb-switch.on{border-style:solid;background:#f7ece4}
+
+/* the headword in an episode row is a control: tap it to look the word up */
+.vrow-w{background:none;border:0;padding:0;font-size:16px;color:#201d1a;text-align:left;
+  border-bottom:1px dotted var(--line)}
+.vrow-w:active{color:var(--clay)}
