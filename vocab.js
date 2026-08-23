@@ -1289,6 +1289,20 @@ function lexisAnalyzeMorph(word) {
   // a lone known suffix (…al, …ous) would just show an empty "词根义未收录" and helps nobody
   var meaningful = root || (prefix && prefix.meaning);
   if (!meaningful) return null;
+  // A SPLIT THAT TEACHES NOTHING IS WORSE THAN NO SPLIT.
+  //
+  // `torment` came out as root ment(心/想) + suffix ment(结果), and the mnemonic
+  // built from it — "ment + ment → 折磨" — is not a memory hook, it is noise
+  // dressed as one. Same for monument and department. When the root and the
+  // suffix are the SAME string the analyser has simply found the suffix twice.
+  // Say nothing; the Origin card carries the real story (torment ← Latin
+  // tormentum ← torquere "to twist", which is also where torture comes from).
+  var rootPart = null, sufPart = null;
+  for (var gi = 0; gi < parts.length; gi++) {
+    if (parts[gi].type === "root") rootPart = parts[gi];
+    if (parts[gi].type === "suffix") sufPart = parts[gi];
+  }
+  if (rootPart && sufPart && rootPart.text === sufPart.text) return null;
   return { parts: parts };
 }
 

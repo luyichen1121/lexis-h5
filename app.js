@@ -1156,15 +1156,6 @@
           ? `<div class="cmp-note">Two or three words, comma-separated. One request; the answer is kept with the word.</div>`
           : `<div class="cmp-note">Needs a model key — <b>Groq is free</b> (console.groq.com, no card). Paste it in Me · ⚙️.</div>`)}</div></div>`;
     }
-    // Origin — knowing the picture behind a phrase is what makes it recallable
-    if (p.origin && p.origin.text) {
-      const o = p.origin, lit = o.kind === "literal";
-      h += `<div class="card"><h2 class="sec">Origin</h2><div class="origin-card">`
-        + (lit ? `<div class="org-lead">Literally, <b>${esc(o.of)}</b> is:</div>`
-               : (o.of && o.of !== norm(p.term) ? `<div class="org-lead">Origin of <b>${esc(o.of)}</b></div>` : ""))
-        + `<div class="org-body">${esc(o.text)}</div>`
-        + `<div class="org-src">${lit ? "literal sense" : "etymology"} · Wiktionary</div></div></div>`;
-    }
     // 例句 — your OWN sentences first (they're the ones you'll actually remember),
     // then the fetched ones. While phase 2 is still running we keep the section
     // visible with a spinner, so a slow source never reads as "no examples".
@@ -1217,6 +1208,15 @@
     // 词族 (with pos)
     if (p.family && p.family.length) h += `<div class="card"><h2 class="sec">Word family</h2><div class="row">` +
       p.family.map((f) => { const w = f.word || f; const pos = f.pos ? ` <small>${esc(f.pos)}</small>` : ""; return `<span class="chip" data-look="${esc(w)}">${esc(w)}${pos}</span>`; }).join("") + `</div></div>`;
+    // Origin — knowing the picture behind a phrase is what makes it recallable
+    if (p.origin && p.origin.text) {
+      const o = p.origin, lit = o.kind === "literal";
+      h += `<div class="card"><h2 class="sec">Origin</h2><div class="origin-card">`
+        + (lit ? `<div class="org-lead">Literally, <b>${esc(o.of)}</b> is:</div>`
+               : (o.of && o.of !== norm(p.term) ? `<div class="org-lead">Origin of <b>${esc(o.of)}</b></div>` : ""))
+        + `<div class="org-body">${esc(o.text)}</div>`
+        + `<div class="org-src">${lit ? "literal sense" : "etymology"} · Wiktionary</div></div></div>`;
+    }
     // Synonyms and look-alikes are the contrast card's chips — ranked, ordered
     // and clickable. Listing them a second time here, inert, was two places
     // saying the same thing (owner: 「这俩部分的功能有点雷同吧」).
@@ -3514,7 +3514,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.110.7 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.111.0 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
