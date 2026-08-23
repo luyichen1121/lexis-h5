@@ -212,7 +212,9 @@
     };
     (p.lookalikes || []).forEach((x, i) => push(x.word, "look-alike", i));
     (p.synonymsRich || []).forEach((x, i) => push(x.word, "synonym", i));
-    (p.synonyms || []).forEach((x, i) => push(x, "synonym", i + 20));
+    // the raw Datamuse list is the noisy one (`norrish`, `nutrify`, `nourisher`
+    // for `nourish`) — only reach for it when the vetted lists came up short
+    if (out.length < 4) (p.synonyms || []).forEach((x, i) => push(x, "synonym", i + 20));
     const band = (r) => (!r ? 4 : r <= 10000 ? 0 : r <= 15000 ? 1 : r <= 20000 ? 2 : 3);
     out.sort((a, b) => band(a.rank) - band(b.rank) || a.i - b.i);
     return out.slice(0, 8);
@@ -1197,18 +1199,9 @@
     // 词族 (with pos)
     if (p.family && p.family.length) h += `<div class="card"><h2 class="sec">Word family</h2><div class="row">` +
       p.family.map((f) => { const w = f.word || f; const pos = f.pos ? ` <small>${esc(f.pos)}</small>` : ""; return `<span class="chip" data-look="${esc(w)}">${esc(w)}${pos}</span>`; }).join("") + `</div></div>`;
-    // Synonyms — each synonym with its own pos / band / definition
-    const synRich = (p.synonymsRich && p.synonymsRich.length) ? p.synonymsRich
-      : (p.synonyms || []).map((w) => ({ word: w }));
-    if (synRich.length) {
-      h += `<div class="card"><h2 class="sec">Synonyms</h2>` + synRich.map((s) =>
-        `<div class="syn"><div class="syn-h"><button class="syn-w" data-look="${esc(s.word)}">${esc(s.word)}</button>${s.pos ? `<span class="pos">${esc(s.pos)}</span>` : ""}${s.band ? `<span class="mfreq freq-${s.band}">${esc(s.bandCn || "")}</span>` : ""}</div>${s.definition ? `<div class="syn-d">${esc(s.definition)}${s.cn ? ` · ${esc(s.cn)}` : ""}</div>` : ""}</div>`).join("") + `</div>`;
-    }
-    // Look-alikes (easily confused)
-    if (p.lookalikes && p.lookalikes.length) {
-      h += `<div class="card"><h2 class="sec">Look-alikes</h2>` + p.lookalikes.map((c) =>
-        `<div class="conf"><button class="conf-w" data-look="${esc(c.word)}">${esc(c.word)}</button><span class="conf-d">${esc(c.definition || c.cn || "")}</span></div>`).join("") + `</div>`;
-    }
+    // Synonyms and look-alikes are the contrast card's chips — ranked, ordered
+    // and clickable. Listing them a second time here, inert, was two places
+    // saying the same thing (owner: 「这俩部分的功能有点雷同吧」).
     // 词频 (detail-only, like the extension: a measured stat, not part of the meaning)
     if (opts.meter) h += freqMeterHTML(p.freq, p.isPhrase || /\s/.test(p.term || ""), p.term);
     return h;
@@ -3503,7 +3496,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.110.3 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.110.4 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
