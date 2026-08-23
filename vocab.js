@@ -3609,6 +3609,49 @@ function lexisCandSet(tok) {
   return v;
 }
 // "make up one's mind" is a citation form: the slot takes any possessive
+// SOME POOL ENTRIES ARE A SENSE, NOT A STRING.
+//
+// The Phrasal Expressions List disambiguates 48 of its rows inside the term
+// itself — "for all ('considering')", "put it ('say')", "that is (rephrasing)".
+// That parenthetical is there BECAUSE the bare tokens have a common reading
+// that is not a lexical unit at all, and lexisCleanChunk() strips it off before
+// the matcher ever sees it. Which is how "doomed to hold the sky upon his
+// shoulders for all [eternity]" became a phrase row glossed 尽管 — the
+// concessive sense of a string that here is a preposition plus a quantifier.
+//
+// Measured on the app's own ten passages: 12 of 41 chunk marks came from these
+// rows and 7 of the 12 were the wrong reading — "a single line", "putting it
+// back", "that is the entire mechanism", "whether to go treated pine". Offline
+// there is nothing to check the sense against, and A MARK NAMING THE WRONG
+// SENSE TEACHES A FALSE THING, while a missing mark costs one suggestion on a
+// page that already has plenty. Same rule as an unpriced word: the absence of
+// evidence renders as silence.
+//
+// So these fourteen are never MARKED in running text. They stay in the pools
+// and in Discover, where the disambiguator sits on screen beside them and the
+// claim is "this expression exists", not "this occurrence is it". Only rows
+// whose tokens are commonly NOT a unit are listed here — "at the time",
+// "in addition", "no doubt", "a further" carry a parenthetical too and stay,
+// because those tokens are always the expression.
+var LEXIS_SENSE_ONLY = {
+  "for all": 1,      // for all eternity / for all of us
+  "that is": 1,      // that is the mechanism
+  "a single": 1,     // a single line
+  "a good": 1,       // a good idea
+  "put it": 1,       // put it back
+  "to go": 1,        // want to go home
+  "to me": 1,        // gave it to me
+  "in that": 1,      // in that box
+  "the case": 1,     // the case was closed
+  "just as": 1,      // just as good
+  "as good as": 1,   // not as good as before
+  "thought of": 1,   // I thought of you
+  "happen to": 1,    // what happened to him
+  "come to": 1,      // come to the office
+};
+function lexisSenseOnlyChunk(term) {
+  return !!LEXIS_SENSE_ONLY[String(term || "").toLowerCase().trim()];
+}
 var LEXIS_POSS = { "one's": 1, "ones": 1, "oneself": 1, my: 1, your: 1, his: 1, her: 1, its: 1, our: 1, their: 1, "someone's": 1, "somebody's": 1 };
 var _lexisChunkPats = null, _lexisChunkHead = null;
 function _lexisChunkPatBuild() {
@@ -3619,6 +3662,7 @@ function _lexisChunkPatBuild() {
     var t = (typeof lexisCleanChunk === "function") ? lexisCleanChunk(raw) : String(raw || "");
     t = String(t || "").toLowerCase().trim();
     if (!t || t.indexOf("/") !== -1) return;          // "there is / are" — two patterns, not one
+    if (LEXIS_SENSE_ONLY[t]) return;                  // a sense we cannot check offline — see above
     var toks = lexisPhraseToks(t);
     if (toks.length < 2 || toks.length > 6 || seen[t]) return;
     seen[t] = 1;
@@ -3734,6 +3778,7 @@ function lexisFoldFamilies(rows) {
 // point the honest separator is frequency and there is no calibrated phrase
 // level to compare against yet.
 function lexisChunkWorthMarking(term) {
+  if (lexisSenseOnlyChunk(term)) return false;
   try { return lexisPhraseType(term) !== "aux"; } catch (e) { return true; }
 }
 
@@ -3757,9 +3802,21 @@ function lexisRecordLevel(level) {
 // priced at all, so it is not quietly reclassified as "you know this" either.
 function lexisSnapWords(rows, level) {
   var l = Number(level) || 0;
-  if (!l) return (rows || []).slice();
+  // A recorded episode keeps whatever the engine marked THE DAY IT WAS RECORDED,
+  // and the detail page shows those stored rows before it re-derives anything.
+  // So a rule about what is worth marking has to be applied here too, or the
+  // episode you already have goes on showing "for all" long after the engine
+  // stopped proposing it — and re-recording is not a fix a person should have to
+  // discover. Same reasoning as the level knob: decide at render time.
+  var keep = function (w) {
+    var isChunk = w.c === 1 || w.kind === "chunk";
+    if (!isChunk) return true;
+    if (typeof lexisChunkWorthMarking !== "function") return true;
+    try { return lexisChunkWorthMarking(w.w || w.term || w.k); } catch (e) { return true; }
+  };
+  if (!l) return (rows || []).filter(function (w) { return w && keep(w); });
   return (rows || []).filter(function (w) {
-    if (!w) return false;
+    if (!w || !keep(w)) return false;
     if (w.c || w.p || w.kind === "chunk" || w.kind === "vpat") return true;
     var r = w.r || w.rank;
     return !r || r > l;
@@ -4664,4 +4721,254 @@ function lexisSameFamily(a, b) {
 }
 
 
-if (typeof window !== "undefined") { window.LEXIS_SEED = LEXIS_SEED; window.LEXIS_SEED_FLAT = LEXIS_SEED_FLAT; window.LEXIS_FREQ = LEXIS_FREQ; window.LEXIS_COMMON = LEXIS_COMMON; window.LEXIS_MORPH = LEXIS_MORPH; window.lexisAnalyzeMorph = lexisAnalyzeMorph; window.lexisWordDomain = lexisWordDomain; window.LEXIS_SCENE_CN = LEXIS_SCENE_CN; window.lexisIdiomScene = lexisIdiomScene; window.LEXIS_PHRASE_SEED = LEXIS_PHRASE_SEED; window.LEXIS_PHRASE_SEED_FLAT = LEXIS_PHRASE_SEED_FLAT; window.lexisPhraseScene = lexisPhraseScene; window.lexisSingularize = lexisSingularize; window.LEXIS_PASSAGES = LEXIS_PASSAGES; window.LEXIS_BAND_SIZE = LEXIS_BAND_SIZE; window.LEXIS_BAND_SEQ = LEXIS_BAND_SEQ; window.LEXIS_BAND_LABEL = LEXIS_BAND_LABEL; window.lexisWordBand = lexisWordBand; window.lexisPassageTokens = lexisPassageTokens; window.lexisEstimateFromReading = lexisEstimateFromReading; window.LEXIS_PROPER_NOUNS = LEXIS_PROPER_NOUNS; window.LEXIS_JUNK_WORDS = LEXIS_JUNK_WORDS; window.lexisIsNoiseWord = lexisIsNoiseWord; window.LEXIS_ABBREV = LEXIS_ABBREV; window.lexisStemCandidates = lexisStemCandidates; window.LEXIS_PHRASE_LIST = LEXIS_PHRASE_LIST; window.LEXIS_PHRASE_EXAMPLE = LEXIS_PHRASE_EXAMPLE; window.LEXIS_PTYPE_CN = LEXIS_PTYPE_CN; window.LEXIS_KIND_CN = LEXIS_KIND_CN; window.LEXIS_PTYPE_RULE = LEXIS_PTYPE_RULE; window.lexisKindOf = lexisKindOf; window.lexisDataScore = lexisDataScore; window.lexisMergeData = lexisMergeData; window.lexisMergeWordPair = lexisMergeWordPair; window.lexisMergeNotebooks = lexisMergeNotebooks; window.lexisDedupeWords = lexisDedupeWords; window.lexisTombKeys = lexisTombKeys; window.lexisTombAt = lexisTombAt; window.lexisPhraseType = lexisPhraseType; window.LEXIS_PHAVE_LIST = LEXIS_PHAVE_LIST; window.LEXIS_PHAVE_MAP = LEXIS_PHAVE_MAP; window.LEXIS_DRILL_CN = LEXIS_DRILL_CN; window.LEXIS_DRILL_EN = LEXIS_DRILL_EN; window.lexisHashText = lexisHashText; window.lexisSentenceQuality = lexisSentenceQuality; window.lexisClozeSplit = lexisClozeSplit; window.lexisWordSentences = lexisWordSentences; window.lexisSenseFor = lexisSenseFor; window.lexisProduced = lexisProduced; window.lexisProduceTarget = lexisProduceTarget; window.lexisBuildDrill = lexisBuildDrill; window.lexisMarkDrill = lexisMarkDrill; window.LEXIS_STR_MAX = LEXIS_STR_MAX; window.LEXIS_DRILL_RUNG = LEXIS_DRILL_RUNG; window.lexisDrillRung = lexisDrillRung; window.lexisDrillScores = lexisDrillScores; window.lexisStrengthOf = lexisStrengthOf; window.lexisEditDistance = lexisEditDistance; window.lexisNormAns = lexisNormAns; window.lexisCheckAnswer = lexisCheckAnswer; window.lexisGradeFor = lexisGradeFor; window.LEXIS_SLOW_MS = LEXIS_SLOW_MS; window.lexisSchedule = lexisSchedule; window.lexisVideoRef = lexisVideoRef; window.lexisFmtAt = lexisFmtAt; window.LEXIS_FREQ_SUPP = LEXIS_FREQ_SUPP; window.LEXIS_PV_ALL = LEXIS_PV_ALL; window.LEXIS_EXPR_ALL = LEXIS_EXPR_ALL; window.LEXIS_IDIOM_SET = LEXIS_IDIOM_SET; window.LEXIS_TAB_WHAT = LEXIS_TAB_WHAT; window.lexisChunksWith = lexisChunksWith; window.lexisCleanChunk = lexisCleanChunk; window.LEXIS_COMPOUND_TAIL = LEXIS_COMPOUND_TAIL; window.lexisCompoundGloss = lexisCompoundGloss; window.lexisBreakdownParts = lexisBreakdownParts; window.lexisChunksInside = lexisChunksInside; window.lexisTermBreakdown = lexisTermBreakdown; window.lexisBreakdownUseful = lexisBreakdownUseful; window.LEXIS_QUICK_CORE = LEXIS_QUICK_CORE; window.LEXIS_QUICK_LEVELS = LEXIS_QUICK_LEVELS; window.LEXIS_QUICK_BANK = LEXIS_QUICK_BANK; window.LEXIS_PSEUDO = LEXIS_PSEUDO; window.lexisQuickRound = lexisQuickRound; window.lexisQuickTally = lexisQuickTally; window.lexisQuickEstimate = lexisQuickEstimate; window.lexisQuickFrontier = lexisQuickFrontier; window.lexisChunkSample = lexisChunkSample; window.lexisChunkTally = lexisChunkTally; window.lexisFmtRank = lexisFmtRank; window.lexisPoolPos = lexisPoolPos; window.lexisPhraseRank = lexisPhraseRank; window.lexisPhraseInfo = lexisPhraseInfo; window.lexisChunkKnown = lexisChunkKnown; window.lexisFindChunks = lexisFindChunks; window.LEXIS_VPAT = LEXIS_VPAT; window.LEXIS_VPAT_MAP = LEXIS_VPAT_MAP; window.LEXIS_VPAT_GAP = LEXIS_VPAT_GAP; window.lexisFindVPats = lexisFindVPats; window.lexisFindUnits = lexisFindUnits; window.lexisVPatInfo = lexisVPatInfo; window.lexisIsVPat = lexisIsVPat; window.lexisChunkWorthMarking = lexisChunkWorthMarking; window.lexisFoldFamilies = lexisFoldFamilies; window.lexisPhraseToks = lexisPhraseToks; window.lexisTokSame = lexisTokSame; window.lexisRankInfo = lexisRankInfo; window.lexisRankText = lexisRankText; window.lexisStemCommon = lexisStemCommon; window.lexisWorthWord = lexisWorthWord; window.LEXIS_IRREG = LEXIS_IRREG; window.lexisLemmaCandidates = lexisLemmaCandidates; window.LEXIS_RANK_BANDS = LEXIS_RANK_BANDS; window.LEXIS_RANK_BAND_CN = LEXIS_RANK_BAND_CN; window.LEXIS_RANK_BAND_EN = LEXIS_RANK_BAND_EN; window.lexisRankBandOf = lexisRankBandOf; window.LEXIS_FORM_OF = LEXIS_FORM_OF; window.lexisIsFormOf = lexisIsFormOf; window.lexisFormOfBase = lexisFormOfBase; window.lexisRankSenses = lexisRankSenses; window.lexisBestSense = lexisBestSense; window.lexisPosKey = lexisPosKey; window.lexisGlossGroups = lexisGlossGroups; window.lexisGlossParts = lexisGlossParts; window.lexisCleanGloss = lexisCleanGloss; window.lexisGlossLine = lexisGlossLine; window.lexisSnapZh = lexisSnapZh; window.lexisCapGloss = lexisCapGloss; window.lexisAlignZh = lexisAlignZh; window.lexisSentenceAt = lexisSentenceAt; window.lexisSafeHead = lexisSafeHead; window.lexisSnapLocate = lexisSnapLocate; window.lexisSnapSentence = lexisSnapSentence; window.lexisSnapRange = lexisSnapRange; window.lexisSameFamily = lexisSameFamily; window.lexisFamStem = lexisFamStem; }
+
+// ---------------------------------------------------------------------------
+// WHICH WORDS ARE ACTUALLY WORTH COMPARING.
+//
+// The candidates a dictionary API gives you ("close by similarity") are not the
+// words you confuse — owner's own report: 「之前建议我比较的词没有那么容易混淆」.
+// The ones people actually get stuck on are a known set, and they come in two
+// shapes, which the app keeps apart because they are different problems:
+//
+//   sense — you know both meanings and cannot choose (trip / travel / journey,
+//           borrow / lend, say / tell). This is the advanced learner's problem
+//           and it is what the contrast card is for.
+//   form  — they look or sound alike and cost you marks in writing
+//           (complement / compliment, principal / principle).
+//   both  — the pair is close in meaning AND in spelling: economic / economical,
+//           sensible / sensitive. The worst kind.
+//
+// Compiled from the standard published inventories of commonly confused words
+// (university writing-centre handouts, Wikipedia's list of commonly misused
+// English words) and from the near-synonym pairs ELT sources single out for
+// learners — then WEIGHTED toward the second, because a Chinese-L1 advanced
+// learner rarely writes "buy" for "by" and often cannot pick between
+// "job" and "work". Word pairs only: every explanation is written by the model
+// at the moment you ask, against the words you chose.
+var LEXIS_CONFUSABLES = [
+  ["sense", ["trip", "travel", "journey"]],
+  ["sense", ["job", "work"]],
+  ["sense", ["borrow", "lend"]],
+  ["sense", ["say", "tell", "speak", "talk"]],
+  ["sense", ["hear", "listen"]],
+  ["sense", ["see", "look", "watch"]],
+  ["sense", ["bring", "take"]],
+  ["sense", ["do", "make"]],
+  ["sense", ["remember", "remind"]],
+  ["sense", ["raise", "rise"]],
+  ["sense", ["lie", "lay"]],
+  ["sense", ["sit", "seat"]],
+  ["sense", ["steal", "rob"]],
+  ["sense", ["cost", "spend", "pay"]],
+  ["sense", ["price", "cost", "fee", "charge"]],
+  ["sense", ["salary", "wage", "income"]],
+  ["sense", ["chance", "opportunity"]],
+  ["sense", ["custom", "habit"]],
+  ["sense", ["injure", "wound", "hurt"]],
+  ["sense", ["deserve", "earn"]],
+  ["sense", ["persuade", "convince"]],
+  ["sense", ["advise", "suggest", "recommend"]],
+  ["sense", ["teach", "learn"]],
+  ["sense", ["wait", "expect"]],
+  ["sense", ["hope", "wish"]],
+  ["sense", ["deny", "refuse", "reject"]],
+  ["sense", ["accept", "agree"]],
+  ["sense", ["notice", "note"]],
+  ["sense", ["achieve", "accomplish", "attain"]],
+  ["sense", ["affect", "influence", "impact"]],
+  ["sense", ["amount", "number", "quantity"]],
+  ["sense", ["assure", "ensure", "insure"]],
+  ["sense", ["avoid", "prevent"]],
+  ["sense", ["beat", "win"]],
+  ["sense", ["begin", "start", "launch"]],
+  ["sense", ["belief", "faith", "trust"]],
+  ["sense", ["bear", "stand", "tolerate", "endure"]],
+  ["sense", ["blame", "accuse", "criticize"]],
+  ["sense", ["cause", "reason"]],
+  ["sense", ["choose", "select", "pick"]],
+  ["sense", ["claim", "argue", "insist"]],
+  ["sense", ["comfortable", "convenient"]],
+  ["sense", ["compare", "contrast"]],
+  ["sense", ["complain", "protest"]],
+  ["sense", ["consist", "comprise", "compose"]],
+  ["sense", ["continual", "continuous"]],
+  ["sense", ["damage", "harm", "destroy", "ruin"]],
+  ["sense", ["decline", "refuse", "reject"]],
+  ["sense", ["delay", "postpone", "defer"]],
+  ["sense", ["demand", "require", "request"]],
+  ["sense", ["discover", "invent", "find"]],
+  ["sense", ["doubt", "suspect"]],
+  ["sense", ["effective", "efficient"]],
+  ["sense", ["empty", "vacant", "blank"]],
+  ["sense", ["enough", "sufficient", "adequate"]],
+  ["sense", ["envy", "jealousy"]],
+  ["sense", ["error", "mistake", "fault"]],
+  ["sense", ["famous", "notorious", "renowned"]],
+  ["sense", ["fast", "quick", "rapid", "swift"]],
+  ["sense", ["fix", "repair", "mend"]],
+  ["sense", ["gather", "collect", "assemble"]],
+  ["sense", ["grow", "raise", "breed"]],
+  ["sense", ["guess", "estimate", "assume"]],
+  ["sense", ["hard", "difficult", "tough"]],
+  ["sense", ["hide", "conceal"]],
+  ["sense", ["ignore", "neglect", "overlook"]],
+  ["sense", ["imagine", "suppose", "assume"]],
+  ["sense", ["important", "significant", "crucial", "essential"]],
+  ["sense", ["increase", "raise", "grow"]],
+  ["sense", ["job", "career", "occupation", "profession"]],
+  ["sense", ["keep", "hold", "retain"]],
+  ["sense", ["kill", "murder", "slay"]],
+  ["sense", ["lack", "shortage", "absence"]],
+  ["sense", ["last", "latest"]],
+  ["sense", ["lay off", "fire", "dismiss"]],
+  ["sense", ["let", "allow", "permit"]],
+  ["sense", ["look for", "find"]],
+  ["sense", ["lonely", "alone"]],
+  ["sense", ["luck", "fortune"]],
+  ["sense", ["maybe", "perhaps", "probably"]],
+  ["sense", ["nervous", "anxious", "worried"]],
+  ["sense", ["nourish", "nurture", "raise"]],
+  ["sense", ["offer", "provide", "supply"]],
+  ["sense", ["opinion", "view", "attitude"]],
+  ["sense", ["pain", "ache", "sore"]],
+  ["sense", ["part", "portion", "piece", "share"]],
+  ["sense", ["permit", "license"]],
+  ["sense", ["problem", "issue", "trouble"]],
+  ["sense", ["proud", "arrogant"]],
+  ["sense", ["purpose", "aim", "goal", "objective"]],
+  ["sense", ["quiet", "silent", "calm"]],
+  ["sense", ["realize", "recognize"]],
+  ["sense", ["reply", "answer", "respond"]],
+  ["sense", ["rest", "relax", "break"]],
+  ["sense", ["result", "consequence", "outcome"]],
+  ["sense", ["rise", "arise", "arouse"]],
+  ["sense", ["safe", "secure"]],
+  ["sense", ["scared", "afraid", "frightened"]],
+  ["sense", ["shade", "shadow"]],
+  ["sense", ["shout", "scream", "yell"]],
+  ["sense", ["skill", "ability", "talent"]],
+  ["sense", ["small", "little", "tiny"]],
+  ["sense", ["solve", "resolve", "settle"]],
+  ["sense", ["sometimes", "sometime", "some time"]],
+  ["sense", ["stay", "remain"]],
+  ["sense", ["strange", "weird", "odd"]],
+  ["sense", ["strength", "force", "power"]],
+  ["sense", ["take", "last", "spend"]],
+  ["sense", ["therefore", "thus", "hence"]],
+  ["sense", ["tired", "exhausted", "weary"]],
+  ["sense", ["torment", "torture", "agony"]],
+  ["sense", ["travel", "commute"]],
+  ["sense", ["use", "utilize", "apply"]],
+  ["sense", ["value", "worth", "price"]],
+  ["sense", ["wander", "wonder"]],
+  ["sense", ["watch", "clock"]],
+  ["sense", ["worth", "worthy", "worthwhile"]],
+  ["sense", ["among", "between"]],
+  ["sense", ["beside", "besides"]],
+  ["sense", ["few", "little"]],
+  ["sense", ["fewer", "less"]],
+  ["sense", ["farther", "further"]],
+  ["sense", ["each", "every"]],
+  ["sense", ["other", "another"]],
+  ["sense", ["so", "such"]],
+  ["sense", ["until", "by"]],
+  ["sense", ["during", "while", "for"]],
+  ["sense", ["in time", "on time"]],
+  ["sense", ["at last", "at least"]],
+  ["form", ["affect", "effect"]],
+  ["form", ["complement", "compliment"]],
+  ["form", ["principal", "principle"]],
+  ["form", ["stationary", "stationery"]],
+  ["form", ["discreet", "discrete"]],
+  ["form", ["elicit", "illicit"]],
+  ["form", ["adverse", "averse"]],
+  ["form", ["imply", "infer"]],
+  ["form", ["prescribe", "proscribe"]],
+  ["form", ["loose", "lose"]],
+  ["form", ["than", "then"]],
+  ["form", ["accept", "except"]],
+  ["form", ["allusion", "illusion"]],
+  ["form", ["appraise", "apprise"]],
+  ["form", ["capital", "capitol"]],
+  ["form", ["climactic", "climatic"]],
+  ["form", ["emigrate", "immigrate"]],
+  ["form", ["eminent", "imminent", "immanent"]],
+  ["form", ["desert", "dessert"]],
+  ["form", ["dissemble", "disassemble"]],
+  ["form", ["flout", "flaunt"]],
+  ["form", ["forego", "forgo"]],
+  ["form", ["hoard", "horde"]],
+  ["form", ["moral", "morale"]],
+  ["form", ["personal", "personnel"]],
+  ["form", ["perspective", "prospective"]],
+  ["form", ["persecute", "prosecute"]],
+  ["form", ["precede", "proceed"]],
+  ["form", ["quiet", "quite"]],
+  ["form", ["sensual", "sensuous"]],
+  ["form", ["tenant", "tenet"]],
+  ["form", ["venal", "venial"]],
+  ["form", ["waive", "wave"]],
+  ["form", ["conscience", "conscious"]],
+  ["form", ["council", "counsel"]],
+  ["form", ["credible", "credulous"]],
+  ["form", ["desirable", "desirous"]],
+  ["form", ["industrial", "industrious"]],
+  ["form", ["ingenious", "ingenuous"]],
+  ["form", ["intense", "intensive"]],
+  ["form", ["literal", "literary", "literate"]],
+  ["form", ["momentary", "momentous"]],
+  ["form", ["official", "officious"]],
+  ["form", ["popular", "populous"]],
+  ["form", ["respectable", "respectful", "respective"]],
+  ["form", ["social", "sociable"]],
+  ["form", ["stimulate", "simulate"]],
+  ["form", ["successful", "successive"]],
+  ["form", ["considerable", "considerate"]],
+  ["form", ["confident", "confidential"]],
+  ["both", ["economic", "economical"]],
+  ["both", ["historic", "historical"]],
+  ["both", ["classic", "classical"]],
+  ["both", ["sensible", "sensitive"]],
+  ["both", ["alternate", "alternative"]],
+  ["both", ["childish", "childlike"]],
+  ["both", ["comprehensible", "comprehensive"]],
+  ["both", ["healthy", "healthful"]],
+  ["both", ["human", "humane"]],
+  ["both", ["imaginary", "imaginative"]],
+  ["both", ["memorable", "memorial"]],
+  ["both", ["negligent", "negligible"]],
+  ["both", ["practical", "practicable"]],
+  ["both", ["economic", "economics"]],
+  ["both", ["politic", "political"]],
+].map(function (r) { return { kind: r[0], words: r[1] }; });
+
+// The sets worth offering YOU: at least one member is already in your notebook
+// (so the answer has an entry to live on, and so it is a word you have actually
+// met), and you have not asked about that set yet. Near-synonym sets first —
+// that is the kind you said you are stuck on — then the ones you have most of.
+function lexisConfusableSuggestions(savedWords, askedKeys, limit) {
+  var saved = {}, i, j;
+  for (i = 0; i < (savedWords || []).length; i++) {
+    var w = String(savedWords[i] || "").toLowerCase().trim();
+    if (w) saved[w] = 1;
+  }
+  var asked = {};
+  for (i = 0; i < (askedKeys || []).length; i++) asked[askedKeys[i]] = 1;
+  var out = [];
+  for (i = 0; i < LEXIS_CONFUSABLES.length; i++) {
+    var set = LEXIS_CONFUSABLES[i], have = 0;
+    for (j = 0; j < set.words.length; j++) if (saved[set.words[j].toLowerCase()]) have++;
+    if (!have) continue;
+    var key = lexisCompareKey(set.words);
+    if (asked[key]) continue;
+    out.push({ words: set.words, kind: set.kind, have: have, key: key });
+  }
+  out.sort(function (a, b) {
+    var ka = a.kind === "sense" ? 0 : a.kind === "both" ? 1 : 2;
+    var kb = b.kind === "sense" ? 0 : b.kind === "both" ? 1 : 2;
+    return ka - kb || b.have - a.have || a.words.length - b.words.length;
+  });
+  return out.slice(0, limit || 6);
+}
+
+if (typeof window !== "undefined") { window.LEXIS_SEED = LEXIS_SEED; window.LEXIS_SEED_FLAT = LEXIS_SEED_FLAT; window.LEXIS_FREQ = LEXIS_FREQ; window.LEXIS_COMMON = LEXIS_COMMON; window.LEXIS_MORPH = LEXIS_MORPH; window.lexisAnalyzeMorph = lexisAnalyzeMorph; window.lexisWordDomain = lexisWordDomain; window.LEXIS_SCENE_CN = LEXIS_SCENE_CN; window.lexisIdiomScene = lexisIdiomScene; window.LEXIS_PHRASE_SEED = LEXIS_PHRASE_SEED; window.LEXIS_PHRASE_SEED_FLAT = LEXIS_PHRASE_SEED_FLAT; window.lexisPhraseScene = lexisPhraseScene; window.lexisSingularize = lexisSingularize; window.LEXIS_PASSAGES = LEXIS_PASSAGES; window.LEXIS_BAND_SIZE = LEXIS_BAND_SIZE; window.LEXIS_BAND_SEQ = LEXIS_BAND_SEQ; window.LEXIS_BAND_LABEL = LEXIS_BAND_LABEL; window.lexisWordBand = lexisWordBand; window.lexisPassageTokens = lexisPassageTokens; window.lexisEstimateFromReading = lexisEstimateFromReading; window.LEXIS_PROPER_NOUNS = LEXIS_PROPER_NOUNS; window.LEXIS_JUNK_WORDS = LEXIS_JUNK_WORDS; window.lexisIsNoiseWord = lexisIsNoiseWord; window.LEXIS_ABBREV = LEXIS_ABBREV; window.lexisStemCandidates = lexisStemCandidates; window.LEXIS_PHRASE_LIST = LEXIS_PHRASE_LIST; window.LEXIS_PHRASE_EXAMPLE = LEXIS_PHRASE_EXAMPLE; window.LEXIS_PTYPE_CN = LEXIS_PTYPE_CN; window.LEXIS_KIND_CN = LEXIS_KIND_CN; window.LEXIS_PTYPE_RULE = LEXIS_PTYPE_RULE; window.lexisKindOf = lexisKindOf; window.lexisDataScore = lexisDataScore; window.lexisMergeData = lexisMergeData; window.lexisMergeWordPair = lexisMergeWordPair; window.lexisMergeNotebooks = lexisMergeNotebooks; window.lexisDedupeWords = lexisDedupeWords; window.lexisTombKeys = lexisTombKeys; window.lexisTombAt = lexisTombAt; window.lexisPhraseType = lexisPhraseType; window.LEXIS_PHAVE_LIST = LEXIS_PHAVE_LIST; window.LEXIS_PHAVE_MAP = LEXIS_PHAVE_MAP; window.LEXIS_DRILL_CN = LEXIS_DRILL_CN; window.LEXIS_DRILL_EN = LEXIS_DRILL_EN; window.lexisHashText = lexisHashText; window.lexisSentenceQuality = lexisSentenceQuality; window.lexisClozeSplit = lexisClozeSplit; window.lexisWordSentences = lexisWordSentences; window.lexisSenseFor = lexisSenseFor; window.lexisProduced = lexisProduced; window.lexisProduceTarget = lexisProduceTarget; window.lexisBuildDrill = lexisBuildDrill; window.lexisMarkDrill = lexisMarkDrill; window.LEXIS_STR_MAX = LEXIS_STR_MAX; window.LEXIS_DRILL_RUNG = LEXIS_DRILL_RUNG; window.lexisDrillRung = lexisDrillRung; window.lexisDrillScores = lexisDrillScores; window.lexisStrengthOf = lexisStrengthOf; window.lexisEditDistance = lexisEditDistance; window.lexisNormAns = lexisNormAns; window.lexisCheckAnswer = lexisCheckAnswer; window.lexisGradeFor = lexisGradeFor; window.LEXIS_SLOW_MS = LEXIS_SLOW_MS; window.lexisSchedule = lexisSchedule; window.lexisVideoRef = lexisVideoRef; window.lexisFmtAt = lexisFmtAt; window.LEXIS_FREQ_SUPP = LEXIS_FREQ_SUPP; window.LEXIS_PV_ALL = LEXIS_PV_ALL; window.LEXIS_EXPR_ALL = LEXIS_EXPR_ALL; window.LEXIS_IDIOM_SET = LEXIS_IDIOM_SET; window.LEXIS_TAB_WHAT = LEXIS_TAB_WHAT; window.lexisChunksWith = lexisChunksWith; window.lexisCleanChunk = lexisCleanChunk; window.LEXIS_COMPOUND_TAIL = LEXIS_COMPOUND_TAIL; window.lexisCompoundGloss = lexisCompoundGloss; window.lexisBreakdownParts = lexisBreakdownParts; window.lexisChunksInside = lexisChunksInside; window.lexisTermBreakdown = lexisTermBreakdown; window.lexisBreakdownUseful = lexisBreakdownUseful; window.LEXIS_QUICK_CORE = LEXIS_QUICK_CORE; window.LEXIS_QUICK_LEVELS = LEXIS_QUICK_LEVELS; window.LEXIS_QUICK_BANK = LEXIS_QUICK_BANK; window.LEXIS_PSEUDO = LEXIS_PSEUDO; window.lexisQuickRound = lexisQuickRound; window.lexisQuickTally = lexisQuickTally; window.lexisQuickEstimate = lexisQuickEstimate; window.lexisQuickFrontier = lexisQuickFrontier; window.lexisChunkSample = lexisChunkSample; window.lexisChunkTally = lexisChunkTally; window.lexisFmtRank = lexisFmtRank; window.lexisPoolPos = lexisPoolPos; window.lexisPhraseRank = lexisPhraseRank; window.lexisPhraseInfo = lexisPhraseInfo; window.lexisChunkKnown = lexisChunkKnown; window.lexisFindChunks = lexisFindChunks; window.LEXIS_VPAT = LEXIS_VPAT; window.LEXIS_VPAT_MAP = LEXIS_VPAT_MAP; window.LEXIS_VPAT_GAP = LEXIS_VPAT_GAP; window.lexisFindVPats = lexisFindVPats; window.lexisFindUnits = lexisFindUnits; window.lexisVPatInfo = lexisVPatInfo; window.lexisIsVPat = lexisIsVPat; window.lexisChunkWorthMarking = lexisChunkWorthMarking; window.LEXIS_SENSE_ONLY = LEXIS_SENSE_ONLY; window.lexisSenseOnlyChunk = lexisSenseOnlyChunk; window.lexisFoldFamilies = lexisFoldFamilies; window.lexisPhraseToks = lexisPhraseToks; window.lexisTokSame = lexisTokSame; window.lexisRankInfo = lexisRankInfo; window.lexisRankText = lexisRankText; window.lexisStemCommon = lexisStemCommon; window.lexisWorthWord = lexisWorthWord; window.LEXIS_IRREG = LEXIS_IRREG; window.lexisLemmaCandidates = lexisLemmaCandidates; window.LEXIS_RANK_BANDS = LEXIS_RANK_BANDS; window.LEXIS_RANK_BAND_CN = LEXIS_RANK_BAND_CN; window.LEXIS_RANK_BAND_EN = LEXIS_RANK_BAND_EN; window.lexisRankBandOf = lexisRankBandOf; window.LEXIS_FORM_OF = LEXIS_FORM_OF; window.lexisIsFormOf = lexisIsFormOf; window.lexisFormOfBase = lexisFormOfBase; window.lexisRankSenses = lexisRankSenses; window.lexisBestSense = lexisBestSense; window.lexisPosKey = lexisPosKey; window.lexisGlossGroups = lexisGlossGroups; window.lexisGlossParts = lexisGlossParts; window.lexisCleanGloss = lexisCleanGloss; window.lexisGlossLine = lexisGlossLine; window.lexisSnapZh = lexisSnapZh; window.lexisCapGloss = lexisCapGloss; window.lexisAlignZh = lexisAlignZh; window.lexisSentenceAt = lexisSentenceAt; window.lexisSafeHead = lexisSafeHead; window.lexisSnapLocate = lexisSnapLocate; window.lexisSnapSentence = lexisSnapSentence; window.lexisSnapRange = lexisSnapRange; window.lexisSameFamily = lexisSameFamily; window.LEXIS_CONFUSABLES = LEXIS_CONFUSABLES; window.lexisConfusableSuggestions = lexisConfusableSuggestions; window.lexisFamStem = lexisFamStem; }

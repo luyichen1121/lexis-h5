@@ -581,3 +581,26 @@ body.looking .nb-only{display:none}
 .vrow-w{background:none;border:0;padding:0;font-size:16px;color:#201d1a;text-align:left;
   border-bottom:1px dotted var(--line)}
 .vrow-w:active{color:var(--clay)}
+
+.cmp-sugg{margin:0 0 12px}
+.cmp-sugg-h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#8a8178;margin-bottom:6px}
+.cmp-sugg-b{display:inline-flex;align-items:baseline;gap:8px;margin:0 6px 6px 0;padding:7px 12px;
+  border:1px dashed var(--line);border-radius:20px;background:transparent;font-family:Georgia,serif;font-size:14px;color:#201d1a}
+.cmp-sugg-b i{font-family:inherit;font-style:normal;font-size:11px;color:#8a8178}
+
+/* Synonyms & usage — the written analysis, in the same card as the picker.
+   It rendered on the extension's detail page only, so the phone (and every
+   look-up card) was visibly thinner than the same word once saved. */
+.sec .reg{color:var(--clay);background:#f6e7e0;padding:1px 7px;border-radius:20px;
+  font-size:11px;letter-spacing:.04em;text-transform:none;vertical-align:middle}
+.usage-note{background:#f6f1ea;border-radius:10px;padding:10px 13px;font-size:14px;
+  line-height:1.7;margin:0 0 10px}
+.syn-item{padding:12px 0;border-top:1px solid var(--line)}
+.syn-h{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:3px}
+.syn-h .syn-w{font-size:17px;font-weight:600}
+.syn-h .syn-g{color:var(--ink2);font-size:13px}
+.syn-ex{font-size:15px;line-height:1.55}
+.syn-ex-cn{color:var(--ink2);font-size:13px;margin-top:2px}
+.syn-diff{margin-top:6px;font-size:13px;line-height:1.6;color:var(--ink2);
+  background:#f6ece6;border-radius:8px;padding:8px 11px}
+.syn-diff .vs{color:var(--clay);font-weight:600;font-style:italic;margin-right:4px}

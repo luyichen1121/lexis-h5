@@ -1179,15 +1179,33 @@
     // TELL THEM APART — the same card the extension has, asking the same
     // question of the same model (data/compare.js). Groq answers CORS-open, so
     // the phone can do this itself; there is no service worker here to relay it.
+    // ONE SECTION, not two. The written synonym analysis and the contrast box
+    // answered the same question from opposite ends, and the analysis half had
+    // never been rendered on this surface at all.
     if (!p.vpat) {
       const c = p.compare;
-      h += `<div class="card" id="cmpSec"><h2 class="sec">Tell them apart</h2>
+      const a = p.synonymAnalysis;
+      const covered = new Set(c && Array.isArray(c.words) ? c.words.map((x) => norm(x.word || "")) : []);
+      const syn = (a && !a.error && Array.isArray(a.synonyms))
+        ? a.synonyms.filter((x) => x && x.word && !covered.has(norm(x.word))).map((x) => `
+            <div class="syn-item">
+              <div class="syn-h"><span class="syn-w">${esc(x.word)}</span>${x.gloss_cn ? `<span class="syn-g">${esc(x.gloss_cn)}</span>` : ""}</div>
+              ${x.example ? `<div class="syn-ex">${esc(x.example)}</div>` : ""}
+              ${x.example_cn ? `<div class="syn-ex-cn">${esc(x.example_cn)}</div>` : ""}
+              ${x.difference_cn ? `<div class="syn-diff"><span class="vs">vs ${esc(p.term)}</span> ${esc(x.difference_cn)}</div>` : ""}
+            </div>`).join("")
+        : "";
+      const answer = c && c.words ? compareHTMLH5(c) : "";
+      const hint = (answer || syn) ? "" : (getSettings().aiKey
+        ? `<div class="cmp-note">Two or three words, comma-separated. One request; the answer is kept with the word.</div>`
+        : `<div class="cmp-note">Needs a model key — <b>Groq is free</b> (console.groq.com, no card). Paste it in Me · ⚙️.</div>`);
+      h += `<div class="card" id="cmpSec"><h2 class="sec">Synonyms &amp; usage${a && !a.error && a.register ? ` <span class="reg">${esc(a.register)}</span>` : ""}</h2>
+        ${a && !a.error && a.usage_note_cn ? `<div class="usage-note">${esc(a.usage_note_cn)}</div>` : ""}
         <div class="cmp-in"><input class="cmp-terms" id="cmpTerms" value="${esc(cmpSeedH5(p))}" placeholder="flourish, nurture, nourish"/>
         <button class="btn" id="cmpGo">Compare</button></div>
         ${cmpChipsH5(p)}
-        <div id="cmpBox">${c && c.words ? compareHTMLH5(c) : (getSettings().aiKey
-          ? `<div class="cmp-note">Two or three words, comma-separated. One request; the answer is kept with the word.</div>`
-          : `<div class="cmp-note">Needs a model key — <b>Groq is free</b> (console.groq.com, no card). Paste it in Me · ⚙️.</div>`)}</div></div>`;
+        <div id="cmpBox">${answer}${hint}</div>
+        ${syn}</div>`;
     }
     // 例句 — your OWN sentences first (they're the ones you'll actually remember),
     // then the fetched ones. While phase 2 is still running we keep the section
@@ -1236,8 +1254,10 @@
           ${c.example ? `<div class="chk-e">${esc(c.example)}</div>` : ""}
         </div>`).join("") + `</div>`;
     }
-    // Word parts
-    h += morphHTML(p.morph);
+    // Word parts — but not once "Why this spelling" has answered. That card
+    // gives the same pieces plus the origin and the same-root words, written
+    // rather than glued together, so printing both is the weaker one on top.
+    if (!(p.spell && (p.spell.origin_cn || p.spell.hook_cn || (p.spell.parts || []).length))) h += morphHTML(p.morph);
     // 词族 (with pos)
     if (p.family && p.family.length) h += `<div class="card"><h2 class="sec">Word family</h2><div class="row">` +
       p.family.map((f) => { const w = f.word || f; const pos = f.pos ? ` <small>${esc(f.pos)}</small>` : ""; return `<span class="chip" data-look="${esc(w)}">${esc(w)}${pos}</span>`; }).join("") + `</div></div>`;
@@ -1760,12 +1780,47 @@
     });
     return out.sort((a, b) => ((b.c.at || 0) - (a.c.at || 0)));
   }
+  // what to compare next — from the published inventories of confusable words,
+  // filtered to sets that touch your notebook (see LEXIS_CONFUSABLES)
+  function cmpSuggestionsH5() {
+    if (typeof window.lexisConfusableSuggestions !== "function") return "";
+    const asked = nbCompares().map((r) => r.key);
+    const sets = window.lexisConfusableSuggestions(getWords().map((w) => w.word), asked, 6);
+    if (!sets.length) return "";
+    const why = { sense: "close in meaning", form: "close in spelling", both: "close in both" };
+    return `<div class="cmp-sugg"><div class="cmp-sugg-h">Worth comparing</div>${sets.map((x) =>
+      `<button class="cmp-sugg-b" data-cmpnew="${esc(x.words.join(","))}">${x.words.map(esc).join(" · ")}<i>${esc(why[x.kind] || "")}</i></button>`).join("")}</div>`;
+  }
+
+  // one wiring for both places the table appears (notebook tab, Discover tab)
+  function wireCompareList(box) {
+    if (!box) return;
+    box.querySelectorAll("[data-look]").forEach((n) => n.addEventListener("click", () => doLookup(n.dataset.look)));
+    box.querySelectorAll("[data-cmpnew]").forEach((b) => b.addEventListener("click", async () => {
+      const terms = b.dataset.cmpnew.split(",").map((t) => t.trim()).filter(Boolean);
+      if (!getSettings().aiKey) { toast("Add a model key in Me · ⚙️ first — Groq is free"); return; }
+      const label = b.innerHTML;
+      b.disabled = true; b.textContent = "asking…";
+      try {
+        const out = await aiCompareH5(terms, "");
+        const ws = getWords();
+        const k = terms.map(norm);
+        const hit = ws.find((w) => k.includes(w.lookup));
+        if (hit) { hit.data = hit.data || {}; hit.data.compare = out; hit.updatedAt = now(); setWords(ws); }
+        // repaint whichever list you are standing in
+        if (current === "notebook") renderNotebook(); else renderDiscover();
+      } catch (e) {
+        toast("Couldn't compare — " + String((e && e.message) || e));
+        b.disabled = false; b.innerHTML = label;
+      }
+    }));
+  }
   function renderComparesH5() {
     const rows = nbCompares();
     if (!rows.length) {
-      return `<div class="card"><p class="muted" style="line-height:1.7">No comparisons yet. Open any word and use <b>Tell them apart</b> — the answer is kept with the word, and every set you ask about shows up here.</p></div>`;
+      return cmpSuggestionsH5() + `<div class="card"><p class="muted" style="line-height:1.7">No comparisons yet. Open any word and use <b>Tell them apart</b> — the answer is kept with the word, and every set you ask about shows up here.</p></div>`;
     }
-    return rows.map((r) => `<div class="card">
+    return cmpSuggestionsH5() + rows.map((r) => `<div class="card">
       <div class="cmp-cands">${r.terms.map((t) => {
         const saved = getWords().some((w) => w.lookup === norm(t));
         return `<button class="cmp-cand${saved ? " on" : ""}" data-look="${esc(t)}">${esc(t)}</button>`;
@@ -1829,7 +1884,7 @@
       ${/* a link away to a different object, not a second row of filters */""}
       ${nbTable === "cmp"
         ? `<button class="nb-switch on nb-only" data-v="words">← Entries</button>`
-        : (nbCompares().length ? `<button class="nb-switch nb-only" data-v="cmp">Confusables <b>${nbCompares().length}</b> →</button>` : "")}
+        : (words.length ? `<button class="nb-switch nb-only" data-v="cmp">Confusables${nbCompares().length ? ` <b>${nbCompares().length}</b>` : ""} →</button>` : "")}
       <div class="subtabs nb-only" id="nbtabs">
         <button data-f="all" class="${nbFilter === "all" ? "on" : ""}">All</button>
         <button data-f="learning" class="${nbFilter === "learning" ? "on" : ""}">Learning</button>
@@ -1876,7 +1931,7 @@
       if (nbTable === "cmp") {
         const cb = $("#nblist");
         cb.innerHTML = renderComparesH5();
-        cb.querySelectorAll("[data-look]").forEach((n) => n.addEventListener("click", () => doLookup(n.dataset.look)));
+        wireCompareList(cb);
         return;
       }
       let list = words.slice();
@@ -3265,7 +3320,7 @@
         <div class="row" style="margin-top:14px"><button class="btn" id="dmore" style="flex:1">Shuffle ↻</button></div>`}`;
     if (dTab === "cmp") {
       view.querySelectorAll("#dtabs button").forEach((b) => b.addEventListener("click", () => { dTab = b.dataset.d; renderDiscover(); }));
-      view.querySelectorAll("#dlist [data-look]").forEach((n) => n.addEventListener("click", () => doLookup(n.dataset.look)));
+      wireCompareList($("#dlist"));
       bindSectionSwitch();
       return;
     }
@@ -3653,7 +3708,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.114.0 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.114.1 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
