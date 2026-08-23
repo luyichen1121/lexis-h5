@@ -1826,13 +1826,12 @@
       <div class="subtabs nb-only" id="nbkinds">
         ${NB_KINDS.map(([k, cn]) => `<button data-k="${k}" class="${nbKind === k ? "on" : ""}">${cn} ${kindCounts[k]}</button>`).join("")}
       </div>
-      <div class="subtabs nb-only" id="nbviews">
-        <button data-v="words" class="${nbTable === "words" ? "on" : ""}">Entries</button>
-        <button data-v="cmp" class="${nbTable === "cmp" ? "on" : ""}">Confusables ${nbCompares().length || ""}</button>
-      </div>
+      ${/* a link away to a different object, not a second row of filters */""}
+      ${nbTable === "cmp"
+        ? `<button class="nb-switch on nb-only" data-v="words">← Entries</button>`
+        : (nbCompares().length ? `<button class="nb-switch nb-only" data-v="cmp">Confusables <b>${nbCompares().length}</b> →</button>` : "")}
       <div class="subtabs nb-only" id="nbtabs">
         <button data-f="all" class="${nbFilter === "all" ? "on" : ""}">All</button>
-        <button data-f="due" class="${nbFilter === "due" ? "on" : ""}">due ${dueWords().length}</button>
         <button data-f="learning" class="${nbFilter === "learning" ? "on" : ""}">Learning</button>
         <button data-f="mastered" class="${nbFilter === "mastered" ? "on" : ""}">Known</button>
       </div>
@@ -1853,7 +1852,7 @@
       <span class="ctrl-wrap nb-only">${kindRuleHTML()}</span>
       <div id="nblist" class="nb-only"></div>`;
     view.querySelectorAll("#nbkinds button").forEach((b) => b.addEventListener("click", () => { nbKind = b.dataset.k; nbScene = null; renderNotebook(); }));
-    view.querySelectorAll("#nbviews button").forEach((b) => b.addEventListener("click", () => { nbTable = b.dataset.v; renderNotebook(); }));
+    view.querySelectorAll("[data-v]").forEach((b) => b.addEventListener("click", () => { nbTable = b.dataset.v; renderNotebook(); }));
     view.querySelectorAll("#nbtabs button").forEach((b) => b.addEventListener("click", () => { nbFilter = b.dataset.f; renderNotebook(); }));
     // one toggle instead of three permanent rows of controls above the list
     $("#nbMore").addEventListener("click", () => {
@@ -3623,7 +3622,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.113.1 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.113.2 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {

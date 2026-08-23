@@ -572,3 +572,7 @@ body.looking .nb-only{display:none}
 .sp-piece b{font-family:Georgia,serif;font-size:14px;color:#201d1a}
 .sp-kin{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}
 .sp-kin-h{font-size:11px;letter-spacing:.08em;color:#8a8178}
+
+.nb-switch{border:1px dashed var(--line);background:transparent;color:var(--clay);border-radius:20px;
+  padding:7px 14px;font-size:13px;margin-bottom:10px}
+.nb-switch.on{border-style:solid;background:#f7ece4}
