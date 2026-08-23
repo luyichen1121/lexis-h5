@@ -33,13 +33,18 @@
     "Contrast these English words: " + list.join(", ") + "\n" +
     (context ? "The learner met one of them here: \"" + String(context).slice(0, 300) + "\"\n" : "") +
     "The learner already knows roughly what each means and cannot choose between them.\n" +
+    "Cover EXACTLY these " + list.length + " words — no others, and leave none out.\n" +
     "For EACH word give: meaning_en (one clause, what it actually denotes), meaning_cn, " +
     "vibe_cn (语感/使用场合, at most 20 Chinese characters: register, connotation, who does it to what), " +
-    "example (ONE natural sentence that the OTHER words on this list could NOT be substituted into), " +
-    "example_cn, and collocs (3 typical collocations).\n" +
-    "Then give axis_cn: the single distinction that separates these words, at most 40 Chinese characters — " +
-    "name the dividing line (what is given / who acts / transitive or not / abstract or physical), do not restate the meanings.\n" +
-    "Then pairs: for each genuinely confusable pair, {\"a\":\"…\",\"b\":\"…\",\"note_cn\":\"swapping them would change …\"}.\n" +
+    "example (ONE natural English sentence the OTHER words on this list could NOT be substituted into — " +
+    "the English sentence is required, never return only its translation), example_cn (that sentence in Chinese), " +
+    "and collocs (3 typical collocations).\n" +
+    "axis_cn: the single distinction that separates these words, at most 40 Chinese characters. NAME THE " +
+    "DIVIDING LINE — what is given, who acts, transitive or not, physical or abstract. " +
+    "Good: 「给的是养分 / 是照料 / 还是结果本身」. Bad: 「描述这些词的区别:用法、使用者、意象」, which " +
+    "describes the task instead of answering it. Never restate these instructions.\n" +
+    "pairs: one entry for EVERY pair of these words, {\"a\",\"b\",\"note_cn\"}, one clause on what swapping a " +
+    "for b would change. This is the part the learner is asking for; do not leave it empty.\n" +
     'Return JSON exactly: {"axis_cn":"…","words":[{"word":"…","meaning_en":"…","meaning_cn":"…","vibe_cn":"…","example":"…","example_cn":"…","collocs":["…"]}],"pairs":[{"a":"…","b":"…","note_cn":"…"}]}';
   return { sys: sys, user: user, terms: list };
   }

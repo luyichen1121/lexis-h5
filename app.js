@@ -203,9 +203,13 @@
   function cmpCandsH5(p) {
     const seen = new Set([norm(p.term)]);
     const out = [];
+    const fam = new Set((p.family || []).map((x) => norm(x.word || x)));
     const push = (w, kind, i) => {
       const k = norm(w);
       if (!k || seen.has(k) || /\s/.test(k)) return;
+      // same word family is not a contrast (nurture / nurturing) — see vocab.js
+      if (fam.has(k)) return;
+      if (typeof window.lexisSameFamily === "function" && window.lexisSameFamily(p.term, k)) return;
       seen.add(k);
       const r = rankInfoOf(w, null);
       out.push({ word: w, kind, i, rank: (r && r.rank) || null });
@@ -3496,7 +3500,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.110.4 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.110.5 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
