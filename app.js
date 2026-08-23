@@ -224,6 +224,21 @@
   const AI_BASE_H5 = { groq: "https://api.groq.com/openai/v1/chat/completions",
                        openai: "https://api.openai.com/v1/chat/completions" };
   const AI_MODEL_H5 = { groq: "llama-3.3-70b-versatile", openai: "gpt-4o-mini", anthropic: "claude-3-5-haiku-latest" };
+  const AI_MODELS_H5 = { groq: "https://api.groq.com/openai/v1/models", openai: "https://api.openai.com/v1/models" };
+  async function pickModelH5(provider, key) {
+    const url = AI_MODELS_H5[provider];
+    if (!url) return "";
+    const r = await fetch(url, { headers: { Authorization: "Bearer " + key } });
+    if (!r.ok) return "";
+    const j = await r.json();
+    const ids = ((j && j.data) || []).map((m) => m && m.id).filter(Boolean)
+      .filter((id) => !/whisper|guard|tts|embed|vision/i.test(id));
+    if (!ids.length) return "";
+    const score = (id) => (/llama/i.test(id) ? 4 : 0) + (/70b|versatile|maverick|scout/i.test(id) ? 3 : 0) +
+                          (/instruct|chat/i.test(id) ? 2 : 0) + (/8b|mini|instant/i.test(id) ? -1 : 0);
+    ids.sort((a, b) => score(b) - score(a) || a.localeCompare(b));
+    return ids[0] || "";
+  }
   async function aiCompareH5(terms, context) {
     const s = getSettings();
     if (!s.aiKey) throw new Error("no key");
@@ -233,7 +248,7 @@
     const k = String(s.aiKey || "").trim();
     const provider = /^gsk_/i.test(k) ? "groq" : /^sk-ant-/i.test(k) ? "anthropic"
       : /^sk-/i.test(k) ? "openai" : (s.aiProvider || "groq");
-    const model = s.aiModel || AI_MODEL_H5[provider] || AI_MODEL_H5.groq;
+    let model = s.aiModel || AI_MODEL_H5[provider] || AI_MODEL_H5.groq;
     let text = "";
     if (provider === "anthropic") {
       const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
@@ -244,11 +259,23 @@
       const j = await r.json();
       text = (j.content || []).map((b) => b.text || "").join("");
     } else {
-      const r = await fetch(AI_BASE_H5[provider] || AI_BASE_H5.groq, { method: "POST",
+      const call = (m) => fetch(AI_BASE_H5[provider] || AI_BASE_H5.groq, { method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + s.aiKey },
-        body: JSON.stringify({ model, temperature: 0.2, response_format: { type: "json_object" },
+        body: JSON.stringify({ model: m, temperature: 0.2, response_format: { type: "json_object" },
           messages: [{ role: "system", content: pr.sys }, { role: "user", content: pr.user }] }) });
-      if (!r.ok) throw new Error(provider + " " + r.status);
+      let r = await call(model);
+      // a hardcoded model name is a date stamp — Groq retires and renames them.
+      // Ask what this key can call, take the best one, remember it. (Same as
+      // pickModel() in background.js.)
+      if (r.status === 404 || r.status === 400) {
+        const picked = await pickModelH5(provider, s.aiKey).catch(() => "");
+        if (picked && picked !== model) {
+          model = picked;
+          const st = getSettings(); st.aiModel = picked; setSettings(st);
+          r = await call(model);
+        }
+      }
+      if (!r.ok) throw new Error(provider + " " + r.status + " " + (await r.text()).slice(0, 120));
       const j = await r.json();
       text = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
     }
@@ -3429,7 +3456,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.110.1 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.110.2 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
