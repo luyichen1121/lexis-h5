@@ -198,6 +198,33 @@
   // ---- audio ----
   // the words this card offers to contrast: the headword plus what the sources
   // already flagged as close or easily confused
+  // the neighbours worth contrasting — near-synonyms AND look-alikes, commonest
+  // first (see cmpCandidates in the extension: same rule, same reason)
+  function cmpCandsH5(p) {
+    const seen = new Set([norm(p.term)]);
+    const out = [];
+    const push = (w, kind, i) => {
+      const k = norm(w);
+      if (!k || seen.has(k) || /\s/.test(k)) return;
+      seen.add(k);
+      const r = rankInfoOf(w, null);
+      out.push({ word: w, kind, i, rank: (r && r.rank) || null });
+    };
+    (p.lookalikes || []).forEach((x, i) => push(x.word, "look-alike", i));
+    (p.synonymsRich || []).forEach((x, i) => push(x.word, "synonym", i));
+    (p.synonyms || []).forEach((x, i) => push(x, "synonym", i + 20));
+    const band = (r) => (!r ? 4 : r <= 10000 ? 0 : r <= 15000 ? 1 : r <= 20000 ? 2 : 3);
+    out.sort((a, b) => band(a.rank) - band(b.rank) || a.i - b.i);
+    return out.slice(0, 8);
+  }
+  function cmpChipsH5(p) {
+    const cands = cmpCandsH5(p);
+    if (!cands.length) return "";
+    const on = new Set(cmpSeedH5(p).toLowerCase().split(/[,;、]+/).map((x) => x.trim()));
+    return `<div class="cmp-cands">${cands.map((c) => `
+      <button class="cmp-cand${on.has(c.word.toLowerCase()) ? " on" : ""}" data-cmpadd="${esc(c.word)}"
+        title="${esc(c.kind)}">${esc(c.word)}${c.rank ? `<span class="cmp-cand-r">#${Number(c.rank).toLocaleString("en-US")}</span>` : ""}</button>`).join("")}</div>`;
+  }
   function cmpSeedH5(p) {
     const near = ((p.lookalikes || []).map((x) => x.word))
       .concat((p.synonymsRich || []).map((x) => x.word))
@@ -1104,6 +1131,7 @@
       h += `<div class="card" id="cmpSec"><h2 class="sec">Tell them apart</h2>
         <div class="cmp-in"><input class="cmp-terms" id="cmpTerms" value="${esc(cmpSeedH5(p))}" placeholder="flourish, nurture, nourish"/>
         <button class="btn" id="cmpGo">Compare</button></div>
+        ${cmpChipsH5(p)}
         <div id="cmpBox">${c && c.words ? compareHTMLH5(c) : (getSettings().aiKey
           ? `<div class="cmp-note">Two or three words, comma-separated. One request; the answer is kept with the word.</div>`
           : `<div class="cmp-note">Needs a model key — <b>Groq is free</b> (console.groq.com, no card). Paste it in Me · ⚙️.</div>`)}</div></div>`;
@@ -1228,6 +1256,25 @@
         box.innerHTML = `<div class="cmp-note err">Couldn't get the comparison — ${esc(String((e && e.message) || e))}.</div>`;
       }
       cg.disabled = false;
+    });
+    root.querySelectorAll("[data-cmpadd]").forEach((b) => b.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      const inp = root.querySelector("#cmpTerms");
+      if (!inp) return;
+      const w = b.dataset.cmpadd;
+      const list = inp.value.split(/[,;、]+/).map((x) => x.trim()).filter(Boolean);
+      const at = list.findIndex((x) => x.toLowerCase() === w.toLowerCase());
+      if (at >= 0) list.splice(at, 1); else list.push(w);
+      inp.value = list.join(", ");
+      b.classList.toggle("on", at < 0);
+    }));
+    // the box arrives pre-filled, so Enter is the gesture — it did nothing before
+    const cti = root.querySelector("#cmpTerms");
+    if (cti) cti.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter") return;
+      ev.preventDefault();
+      const g = root.querySelector("#cmpGo");
+      if (g) g.click();
     });
     const add = root.querySelector("#addExBtn");
     if (add) add.addEventListener("click", async () => {
@@ -3456,7 +3503,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.110.2 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.110.3 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {

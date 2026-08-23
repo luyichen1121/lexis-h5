@@ -554,3 +554,9 @@ body.looking .nb-only{display:none}
 .cmp-pair b{color:#201d1a;font-weight:600}
 .cmp-note{font-size:12px;color:#8a8178;line-height:1.65}
 .cmp-note.err{color:var(--clay)}
+
+.cmp-cands{display:flex;flex-wrap:wrap;gap:6px;margin:-4px 0 10px}
+.cmp-cand{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border:1px solid var(--line);
+  border-radius:20px;background:#fff;font-size:13px;color:#201d1a}
+.cmp-cand.on{background:#f7ece4;border-color:var(--clay);color:var(--clay)}
+.cmp-cand-r{font-size:11px;color:#8a8178}
