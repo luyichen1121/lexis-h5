@@ -560,3 +560,7 @@ body.looking .nb-only{display:none}
   border-radius:20px;background:#fff;font-size:13px;color:#201d1a}
 .cmp-cand.on{background:#f7ece4;border-color:var(--clay);color:var(--clay)}
 .cmp-cand-r{font-size:11px;color:#8a8178}
+
+.cmp-shared{background:#f6f1ea;border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:14px;line-height:1.65}
+.cmp-shared .lbl{display:inline-block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#8a8178;margin-right:8px}
+.cmp-diff{font-size:14px;color:var(--clay);line-height:1.6;margin:4px 0 2px}

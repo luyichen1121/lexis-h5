@@ -240,9 +240,11 @@
   }
   function compareHTMLH5(c) {
     if (!c || !Array.isArray(c.words) || !c.words.length) return "";
-    return (c.axis_cn ? `<div class="cmp-axis"><span class="lbl">分界线</span>${esc(c.axis_cn)}</div>` : "")
+    return (c.shared_cn ? `<div class="cmp-shared"><span class="lbl">共同点</span>${esc(c.shared_cn)}</div>` : "")
+      + (c.axis_cn ? `<div class="cmp-axis"><span class="lbl">分界线</span>${esc(c.axis_cn)}</div>` : "")
       + c.words.map((x) => `<div class="cmp-w">
-          <div class="cmp-h"><span class="cmp-t">${esc(x.word)}</span>${x.vibe_cn ? `<span class="cmp-vibe">${esc(x.vibe_cn)}</span>` : ""}</div>
+          <div class="cmp-h"><span class="cmp-t">${esc(x.word)}</span></div>
+          ${(x.diff_cn || x.vibe_cn) ? `<div class="cmp-diff">${esc(x.diff_cn || x.vibe_cn)}</div>` : ""}
           ${x.meaning_en ? `<div class="cmp-m">${esc(x.meaning_en)}</div>` : ""}
           ${x.meaning_cn ? `<div class="cmp-mcn">${esc(x.meaning_cn)}</div>` : ""}
           ${x.example ? `<div class="cmp-ex">${esc(x.example)}</div>` : ""}
@@ -3500,7 +3502,7 @@
         <input type="file" id="impFile" accept="application/json" hidden>
       </div>
       </div>
-      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.110.5 · Data lives only in this browser</p>`;
+      <p class="muted" style="text-align:center;font-size:12px">Lexis H5 v1.110.6 · Data lives only in this browser</p>`;
 
     // settings you actually touch stay visible; sync/data/maintenance fold away
     $("#advToggle").addEventListener("click", () => {
